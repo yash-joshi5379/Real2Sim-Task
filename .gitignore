@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Raw recordings and generated data (large; share via release/HF instead)
+data/
+outputs/
+*.mp4
+*.mov
+
+# Checkpoints
+checkpoints/
+wandb/
+*.pt
+*.safetensors
+
+# OS / editor
+.DS_Store
+.vscode/

@@ -1,0 +1,3 @@
+# Installed on top of LeRobot (see setup/install_linux.sh)
+pillow
+numpy
