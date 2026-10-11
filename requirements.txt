@@ -4,3 +4,5 @@ numpy
 scipy
 matplotlib
 mediapipe==0.10.32   # hand landmarks (Tasks API); tested version
+imageio
+imageio-ffmpeg     # mp4 writing for replay videos
