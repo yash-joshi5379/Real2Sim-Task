@@ -54,8 +54,19 @@ python src/view_scenes.py               # render scenes to outputs/scenes/
 4. Side-by-side video of a demo and its replay (time-aligned):
 
    ```bash
-   python src/side_by_side.py --episodes ep_029 ep_051
+   python src/side_by_side.py --episodes ep_029 ep_051 --speed 1.3
    ```
+
+5. Build the training dataset (LeRobot format, same layout as `lerobot/libero`):
+
+   ```bash
+   python src/make_dataset.py --speed 1.3          # -> data/lerobot/ketchup_from_phone
+   ```
+
+   `--speed 1.3` plays the human motion 1.3x faster: LIBERO stops an episode after
+   280 steps, and at 1x the slowest replays only succeed at step 278. At 1.3x all 54
+   still succeed, at step 178 (median) and 223 (slowest). `--augment K` adds K replays
+   per demo with the ketchup moved up to 3 cm.
 
 ### Replay results
 
@@ -80,3 +91,43 @@ What did not work at first, and why:
 - Grasping where the hand did (often near the neck) made the ketchup slip; grasping
   below ~8.5 cm made it drop or catch the basket. A height sweep gave a secure 8.5-10.5 cm
   band, and the human grasp height is mapped into it.
+
+## Training and evaluation (SmolVLA, rented GPU)
+
+Two policies, same base model and settings, differing only in where the demos came from:
+
+- **A (this project):** the 54 demos retargeted from phone video.
+- **B (reference):** LIBERO's own robot teleoperation demos of the same task, from `lerobot/libero`.
+
+Copy `data/lerobot/ketchup_from_phone/` to the GPU machine, then:
+
+```bash
+# A: trained only on demos from phone video
+lerobot-train \
+  --policy.path=lerobot/smolvla_base \
+  --dataset.repo_id=local/ketchup_from_phone \
+  --dataset.root=data/lerobot/ketchup_from_phone \
+  --rename_map='{"observation.images.image": "observation.images.camera1", "observation.images.image2": "observation.images.camera2"}' \
+  --batch_size=32 --steps=20000 \
+  --output_dir=outputs/train/smolvla_phone --job_name=smolvla_phone \
+  --policy.device=cuda --policy.push_to_hub=false
+
+# B: trained only on LIBERO's robot demos of the same task
+python src/reference_episodes.py        # prints --dataset.episodes=[...]
+lerobot-train \
+  --policy.path=lerobot/smolvla_base \
+  --dataset.repo_id=lerobot/libero \
+  --dataset.episodes=[...]   \
+  --rename_map='{"observation.images.image": "observation.images.camera1", "observation.images.image2": "observation.images.camera2"}' \
+  --batch_size=32 --steps=20000 \
+  --output_dir=outputs/train/smolvla_libero_ref --job_name=smolvla_libero_ref \
+  --policy.device=cuda --policy.push_to_hub=false
+
+# Evaluate either one on LIBERO's 50 standard starting layouts for this task
+lerobot-eval \
+  --policy.path=outputs/train/smolvla_phone/checkpoints/last/pretrained_model \
+  --env.type=libero --env.task=libero_object --env.task_ids=[4] \
+  --env.observation_height=256 --env.observation_width=256 \
+  --eval.n_episodes=50 --eval.batch_size=10 --seed=1000 \
+  --rename_map='{"observation.images.image": "observation.images.camera1", "observation.images.image2": "observation.images.camera2"}'
+```

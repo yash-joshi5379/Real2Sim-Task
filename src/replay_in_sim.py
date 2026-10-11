@@ -116,7 +116,7 @@ def apply_xy(T, xy):
     return out
 
 
-def retarget(traj, meta, T, home, basket_xy):
+def retarget(traj, meta, T, home, basket_xy, speed=1.0):
     """Return (targets (K,3), gripper (K,), phase (K,)) at CTRL_HZ for one demo."""
     t, pos, seg = traj["t"], traj["pos"], traj["segment"]
     carry = np.where(seg == 1)[0]
@@ -124,7 +124,8 @@ def retarget(traj, meta, T, home, basket_xy):
     dt = 1.0 / CTRL_HZ
 
     def resample(t0, t1):
-        tt = np.arange(t0, t1, dt)
+        # speed > 1 plays your motion faster than you did it (same path, less time)
+        tt = np.arange(t0, t1, dt * speed)
         return tt, np.stack([np.interp(tt, t, pos[:, k]) for k in range(3)], axis=1)
 
     ketchup_xy = apply_xy(T, pos[L, :2])[0]        # where your hand closed on the bottle
@@ -149,7 +150,7 @@ def retarget(traj, meta, T, home, basket_xy):
     reach = np.c_[xy, z]
 
     # --- carry: straight from your hand, with heights rescaled
-    tc, pc = resample(t[L], t[R] + dt)
+    tc, pc = resample(t[L], t[R] + dt * speed)
     xy = apply_xy(T, pc[:, :2])
     xy = xy + (1 - smoothstep(np.linspace(0, 1, len(tc)) / 0.4))[:, None] * (grasp[:2] - xy[0])
     dz = pc[:, 2] - pc[0, 2]
@@ -168,6 +169,7 @@ def retarget(traj, meta, T, home, basket_xy):
 
     info = {"ketchup_xy": ketchup_xy.tolist(), "grasp_z": g_sim, "carry_peak_real_m": float(peak),
             "release_xy": carry_path[-1, :2].tolist(), "endpoint_fix_m": float(np.linalg.norm(fix)),
+            "speed": float(speed),
             "human_steps": int(len(reach) + len(carry_path))}
     return {"reach": reach, "grasp": grasp, "pre_grasp": np.r_[grasp[:2], pre_z],
             "carry": carry_path, "basket_xy": basket_xy,
@@ -186,7 +188,16 @@ def make_env(size, cameras=True):
     kw = {} if cameras else {"use_camera_obs": False}     # no rendering: ~5x faster, for tuning
     env = OffScreenRenderEnv(bddl_file_name=bddl, camera_heights=size, camera_widths=size, **kw)
     env.seed(0)
-    return env, suite.get_task_init_states(TASK_ID), task.language
+    return env, load_init_states(task), task.language
+
+
+def load_init_states(task):
+    """LIBERO's fixed initial layouts for a task (works with old and new PyTorch)."""
+    import torch
+    from libero.libero import get_libero_path
+
+    path = Path(get_libero_path("init_states")) / task.problem_folder / task.init_states_file
+    return torch.load(path, weights_only=False)  # LIBERO's own data file (numpy array)
 
 
 def reset_with_ketchup(env, init_state, ketchup_xy, settle=10):
@@ -216,10 +227,10 @@ def rot_action(cur_quat_xyzw, target_R):
 class Runner:
     """Steps the env towards targets, logging actions/states (and frames)."""
 
-    def __init__(self, env, obs, record):
+    def __init__(self, env, obs, record, hook=None):
         from robosuite.utils import transform_utils as tu
 
-        self.tu, self.env, self.obs, self.record = tu, env, obs, record
+        self.tu, self.env, self.obs, self.record, self.hook = tu, env, obs, record, hook
         self.down_R = tu.quat2mat(obs["robot0_eef_quat"])     # keep the starting, pointing-down orientation
         self.actions, self.states, self.frames, self.phases = [], [], [], []
         self.success_step = None
@@ -239,6 +250,8 @@ class Runner:
             self.frames.append(np.concatenate([o["agentview_image"][::-1], o["robot0_eye_in_hand_image"][::-1]], 1))
         self.actions.append(a)
         self.phases.append(phase)
+        if self.hook is not None:            # e.g. make_dataset.py records (observation, action) here
+            self.hook(o, a, phase)
         self.obs, _, _, _ = self.env.step(a.tolist())
         if self.success_step is None and self.env.check_success():
             self.success_step = len(self.actions) - 1
@@ -276,18 +289,19 @@ class Runner:
 PHASES = ["reach (human)", "align", "descend", "close", "carry (human)", "settle", "release", "retreat"]
 
 
-def run_episode(env, init_state, plan, info, record=False):
+def run_episode(env, init_state, plan, info, record=False, hook=None):
+    sp = info.get("speed", 1.0)                 # robot-side moves are sped up by the same factor
     obs = reset_with_ketchup(env, init_state, info["ketchup_xy"])
-    r = Runner(env, obs, record)
+    r = Runner(env, obs, record, hook)
     r.follow(plan["reach"], -1, 0)                                          # your reach
     r.settle(plan["pre_grasp"], -1, 1, tol=0.01, max_s=1.5)                # line up above the ketchup
-    r.move(r.eef().copy(), plan["grasp"], 0.8, -1, 2)                       # straight down
+    r.move(r.eef().copy(), plan["grasp"], 0.8 / sp, -1, 2)                  # straight down
     r.settle(plan["grasp"], -1, 2, tol=0.01, max_s=0.8)
     r.settle(plan["grasp"], 1, 3, tol=0.0, max_s=GRASP_DWELL, min_s=GRASP_DWELL)   # close the gripper
     r.follow(plan["carry"], 1, 4, rim=(plan["basket_xy"], plan["rim_z"]))  # your carry
-    r.settle(plan["carry"][-1], 1, 5, tol=0.015, max_s=1.0)                 # arrive before letting go
+    r.settle(plan["carry"][-1], 1, 5, tol=0.015, max_s=1.0 / sp)            # arrive before letting go
     r.settle(plan["carry"][-1], -1, 6, tol=0.0, max_s=RELEASE_DWELL, min_s=RELEASE_DWELL)
-    r.move(r.eef().copy(), r.eef() + [0, 0, 0.12], RETREAT_SECONDS, -1, 7)  # lift away
+    r.move(r.eef().copy(), r.eef() + [0, 0, 0.12], RETREAT_SECONDS / sp, -1, 7)  # lift away
     if record:
         o = r.obs
         r.frames.append(np.concatenate([o["agentview_image"][::-1], o["robot0_eye_in_hand_image"][::-1]], 1))
@@ -304,6 +318,9 @@ def main():
     p.add_argument("--episodes", nargs="+")
     p.add_argument("--video", action="store_true", help="save an mp4 per episode")
     p.add_argument("--init-state", type=int, default=0, help="which LIBERO initial layout to use")
+    p.add_argument("--speed", type=float, default=1.0,
+                   help="play your motion this many times faster (1.3 keeps episodes well inside "
+                        "LIBERO's 280-step limit)")
     args = p.parse_args()
 
     traj_dir, out = Path(args.traj), Path(args.out)
@@ -313,7 +330,7 @@ def main():
     trajs = {n: dict(np.load(traj_dir / f"{n}.npz")) for n in names}
     T = fit_xy_transform(list(trajs.values()))
     (out / "retarget.json").write_text(json.dumps(T, indent=2))
-    print(f"xy transform: scale {T['scale']:.3f}, rotation {T['angle_deg']:.1f} deg")
+    print(f"xy transform: scale {T['scale']:.3f}, rotation {T['angle_deg']:.1f} deg, speed x{args.speed}")
     if args.episodes:
         names = [n for n in names if n in args.episodes]
 
@@ -326,7 +343,7 @@ def main():
     rows = []
     for n in names:
         traj = trajs[n]
-        plan, info = retarget(traj, metas[n], T, home, basket_xy)
+        plan, info = retarget(traj, metas[n], T, home, basket_xy, args.speed)
         res = run_episode(env, init_state, plan, info, record=args.video)
         np.savez_compressed(out / f"{n}.npz", actions=res["actions"], states=res["states"],
                             phase=res["phase"], ketchup_xy=np.array(info["ketchup_xy"]),

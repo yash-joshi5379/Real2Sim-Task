@@ -28,20 +28,20 @@ PHASE_TEXT = ["following your reach", "robot: lining up", "robot: descending", "
               "following your carry", "robot: arriving", "releasing", "robot: lifting away"]
 
 
-def human_frame_times(phase, t_lift, t_release, reach_start):
+def human_frame_times(phase, t_lift, t_release, reach_start, speed=1.0):
     """For each sim step, the time in your video to show."""
     times, k_reach, k_carry, after = [], 0, 0, 0
     for p in phase:
         if p == 0:
-            times.append(reach_start + k_reach / R.CTRL_HZ)
+            times.append(reach_start + k_reach * speed / R.CTRL_HZ)
             k_reach += 1
         elif p in (1, 2, 3):
             times.append(t_lift)
         elif p == 4:
-            times.append(t_lift + k_carry / R.CTRL_HZ)
+            times.append(t_lift + k_carry * speed / R.CTRL_HZ)
             k_carry += 1
         else:
-            times.append(t_release + after / R.CTRL_HZ)
+            times.append(t_release + after * speed / R.CTRL_HZ)
             after += 1
     return np.array(times)
 
@@ -85,6 +85,7 @@ def main():
     p.add_argument("--traj", default="data/trajectories")
     p.add_argument("--out", default="data/side_by_side")
     p.add_argument("--height", type=int, default=480, help="video height in pixels (even)")
+    p.add_argument("--speed", type=float, default=1.0, help="same --speed as used for replay_in_sim.py")
     args = p.parse_args()
     import imageio
 
@@ -102,12 +103,12 @@ def main():
 
     for n in args.episodes:
         traj, meta = trajs[n], metas[n]
-        plan, info = R.retarget(traj, meta, T, home, basket_xy)
+        plan, info = R.retarget(traj, meta, T, home, basket_xy, args.speed)
         res = R.run_episode(env, init_state, plan, info, record=True)
         seg, t = traj["segment"], traj["t"]
         c = np.where(seg == 1)[0]
         t_lift, t_rel = t[c[0]], t[c[-1]]
-        times = human_frame_times(res["phase"], t_lift, t_rel, max(0.0, t_lift - R.REACH_SECONDS))
+        times = human_frame_times(res["phase"], t_lift, t_rel, max(0.0, t_lift - R.REACH_SECONDS), args.speed)
         skip = (meta.get("stale_frames_dropped") or [0, 0])[0]
         human = read_frames(Path(args.clips) / f"{n}.mp4", times, skip, args.height)
 
