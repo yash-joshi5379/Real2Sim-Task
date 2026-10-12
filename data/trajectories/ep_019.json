@@ -1,0 +1,50 @@
+{
+  "episode": "ep_019",
+  "fps": 30.0,
+  "frames": 781,
+  "source_resolution": [
+    3840,
+    2160
+  ],
+  "focal_px_at_3840": 2667.0,
+  "sheet_sides_m": [
+    0.2123,
+    0.2156,
+    0.2979,
+    0.2999
+  ],
+  "focal_note": null,
+  "stale_frames_dropped": [
+    0,
+    0
+  ],
+  "camera_position_m": [
+    0.6214,
+    -0.3311,
+    0.5101
+  ],
+  "bottle_start_xy_m": [
+    -0.3501,
+    -0.5235
+  ],
+  "bottle_height_m": 0.1903,
+  "bottle_drop_xy_m": [
+    -0.3808,
+    -0.0082
+  ],
+  "t_gripper_close_s": 9.267,
+  "t_lift_s": 9.5,
+  "t_release_s": 15.267,
+  "quality": {
+    "hand_coverage_reach": 1.0,
+    "hand_coverage_retreat": 0.991,
+    "hand_coverage_carry": 0.994,
+    "hand_depth_scale_reach": 0.854,
+    "hand_depth_scale_retreat": 1.134,
+    "grasp_height_m": 0.195,
+    "release_dist_to_drop_m": 0.112
+  },
+  "flags": [
+    "grasp height 0.19 m is not on the bottle"
+  ]
+}

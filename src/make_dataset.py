@@ -13,14 +13,17 @@ lerobot-eval feeds a policy, so the same policy config trains on both:
   action                      7-D delta end-effector + gripper, in [-1, 1]
   task                        "pick up the ketchup and place it in the basket"
 
-Optional augmentation (--augment K): each human demo is also replayed K more times
-with the ketchup moved to a random spot (+-3 cm) inside LIBERO's spawn region, the
-retargeted path bending to meet it. Same human motion, more robot data.
+Ketchup placement:
+  --placement human  (default) the ketchup starts where your hand found the bottle;
+                     --augment K adds K copies nudged by up to 3 cm.
+  --placement spawn  the ketchup starts at random points inside LIBERO's own spawn
+                     region (a 5x5 cm area, where evaluation puts it), 1 + K copies per
+                     demo. Same human motion, bent to meet the ketchup.
 
 Usage:
     python src/make_dataset.py --speed 1.3                    # 54 episodes
-    python src/make_dataset.py --speed 1.3 --augment 3 \\
-        --out data/lerobot/ketchup_from_phone_aug --repo-id local/ketchup_from_phone_aug
+    python src/make_dataset.py --speed 1.3 --placement spawn --augment 3 \\
+        --out data/lerobot/ketchup_from_phone_spawn4 --repo-id local/ketchup_from_phone_spawn4
 """
 
 import argparse
@@ -36,6 +39,9 @@ import replay_in_sim as R  # noqa: E402
 
 IMG = 256
 TAIL_AFTER_SUCCESS = 10            # steps kept after the ketchup lands (gripper opening)
+# LIBERO's spawn region for the ketchup (target_object_region in the task's BDDL file), xy in m
+SPAWN_LO = np.array([-0.145, -0.265])
+SPAWN_HI = np.array([-0.095, -0.215])
 
 FEATURES = {
     "observation.images.image": {"dtype": "video", "shape": (IMG, IMG, 3),
@@ -97,6 +103,9 @@ def main():
     p.add_argument("--episodes", nargs="+", help="e.g. ep_001 ep_002 (default: all)")
     p.add_argument("--speed", type=float, default=1.3)
     p.add_argument("--augment", type=int, default=0, help="extra replays per demo with the ketchup moved")
+    p.add_argument("--placement", choices=["human", "spawn"], default="human",
+                   help="human: ketchup where your hand found the bottle; spawn: random points in "
+                        "LIBERO's ketchup spawn region (where evaluation puts it)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--init-state", type=int, default=0)
     p.add_argument("--overwrite", action="store_true")
@@ -129,10 +138,20 @@ def main():
     index, skipped = [], []
     for n in names:
         plan0, info0 = R.retarget(trajs[n], metas[n], T, home, basket_xy, args.speed)
-        variants = [(plan0, info0, [0.0, 0.0])]
-        for _ in range(args.augment):
-            d = rng.uniform(-0.03, 0.03, size=2)
-            variants.append((*shift_plan(plan0, info0, d), d.tolist()))
+        variants = []
+        if args.placement == "human":
+            # where your hand found the bottle (+ optional random nudges of up to 3 cm)
+            variants.append((plan0, info0, [0.0, 0.0]))
+            for _ in range(args.augment):
+                d = rng.uniform(-0.03, 0.03, size=2)
+                variants.append((*shift_plan(plan0, info0, d), d.tolist()))
+        else:
+            # "spawn": the ketchup at random points inside LIBERO's own spawn region, the
+            # region evaluation layouts use; your motion bends to meet it (1 + augment copies)
+            for _ in range(1 + args.augment):
+                target = rng.uniform(SPAWN_LO, SPAWN_HI)
+                d = target - np.array(info0["ketchup_xy"])
+                variants.append((*shift_plan(plan0, info0, d), d.tolist()))
         for v, (plan, info, d) in enumerate(variants):
             steps, res = record_episode(env, init_state, plan, info)
             tag = n if v == 0 else f"{n}+aug{v}"
@@ -150,7 +169,8 @@ def main():
     ds.finalize()
 
     (out / "episode_sources.json").write_text(json.dumps(
-        {"speed": args.speed, "augment": args.augment, "seed": args.seed, "init_state": args.init_state,
+        {"speed": args.speed, "augment": args.augment, "placement": args.placement, "seed": args.seed,
+         "init_state": args.init_state,
          "transform": T, "skipped": skipped, "episodes": index}, indent=2))
     frames = sum(e["frames"] for e in index)
     print(f"\n{len(index)} episodes, {frames} frames -> {out}  (skipped {len(skipped)})")

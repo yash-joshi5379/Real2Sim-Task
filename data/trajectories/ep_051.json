@@ -1,0 +1,48 @@
+{
+  "episode": "ep_051",
+  "fps": 30.0,
+  "frames": 571,
+  "source_resolution": [
+    3840,
+    2160
+  ],
+  "focal_px_at_3840": 2651.0,
+  "sheet_sides_m": [
+    0.2115,
+    0.2148,
+    0.2992,
+    0.301
+  ],
+  "focal_note": null,
+  "stale_frames_dropped": [
+    0,
+    0
+  ],
+  "camera_position_m": [
+    0.6171,
+    -0.3336,
+    0.511
+  ],
+  "bottle_start_xy_m": [
+    -0.3404,
+    -0.5145
+  ],
+  "bottle_height_m": 0.1898,
+  "bottle_drop_xy_m": [
+    -0.3797,
+    0.0028
+  ],
+  "t_gripper_close_s": 6.767,
+  "t_lift_s": 7.0,
+  "t_release_s": 12.167,
+  "quality": {
+    "hand_coverage_reach": 0.871,
+    "hand_coverage_retreat": 1.0,
+    "hand_coverage_carry": 0.942,
+    "hand_depth_scale_reach": 0.628,
+    "hand_depth_scale_retreat": 0.986,
+    "grasp_height_m": 0.148,
+    "release_dist_to_drop_m": 0.097
+  },
+  "flags": []
+}
