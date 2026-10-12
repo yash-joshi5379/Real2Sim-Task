@@ -13,6 +13,9 @@ lerobot-eval feeds a policy, so the same policy config trains on both:
   action                      7-D delta end-effector + gripper, in [-1, 1]
   task                        "pick up the ketchup and place it in the basket"
 
+Motion (--motion): human (default) uses your reach and carry; scripted is a control
+experiment that swaps them for smooth standard-shape paths, keeping everything else.
+
 Ketchup placement:
   --placement human  (default) the ketchup starts where your hand found the bottle;
                      --augment K adds K copies nudged by up to 3 cm.
@@ -74,6 +77,34 @@ def shift_plan(plan, info, d):
     return plan, info
 
 
+def scripted_plan(plan, info, home, reach_steps, carry_steps):
+    """Control experiment: replace your reach and carry with smooth, standard-shape paths.
+
+    Everything else stays as in the human version (ketchup position, grasp height,
+    release point, robot-side waits), so comparing the two isolates the effect of the
+    human motion itself (its shape, wobble and timing).
+      reach: straight, minimum-jerk move from the start pose to above the ketchup
+      carry: lift straight up to the same peak height, move across, lower to the
+             same release point (30% / 45% / 25% of the time)
+    Durations are fixed (the median over your demos), not per demo.
+    """
+    plan = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in plan.items()}
+
+    def minjerk(a, b, n):
+        u = np.linspace(0, 1, max(n, 2))
+        w = 10 * u**3 - 15 * u**4 + 6 * u**5
+        return a + (b - a) * w[:, None]
+
+    plan["reach"] = minjerk(home, plan["pre_grasp"], reach_steps)
+    g, rel = plan["grasp"], plan["carry"][-1]
+    peak_z = max(plan["carry"][:, 2].max(), plan["rim_z"])
+    up, across = np.r_[g[:2], peak_z], np.r_[rel[:2], peak_z]
+    n1, n2 = int(0.30 * carry_steps), int(0.45 * carry_steps)
+    plan["carry"] = np.concatenate([minjerk(g, up, n1), minjerk(up, across, n2),
+                                    minjerk(across, rel, carry_steps - n1 - n2)])
+    return plan, dict(info)
+
+
 def record_episode(env, init_state, plan, info):
     """Replay with cameras on; return per-step frames, or None if the replay failed."""
     from robosuite.utils import transform_utils as tu
@@ -103,6 +134,8 @@ def main():
     p.add_argument("--episodes", nargs="+", help="e.g. ep_001 ep_002 (default: all)")
     p.add_argument("--speed", type=float, default=1.3)
     p.add_argument("--augment", type=int, default=0, help="extra replays per demo with the ketchup moved")
+    p.add_argument("--motion", choices=["human", "scripted"], default="human",
+                   help="scripted: control experiment with smooth standard reach/carry paths")
     p.add_argument("--placement", choices=["human", "spawn"], default="human",
                    help="human: ketchup where your hand found the bottle; spawn: random points in "
                         "LIBERO's ketchup spawn region (where evaluation puts it)")
@@ -132,12 +165,19 @@ def main():
     home = R.reset_with_ketchup(env, init_state, R.KETCHUP_SPAWN)["robot0_eef_pos"].copy()
     basket_xy = env.env.sim.data.get_joint_qpos("basket_1_joint0")[:2].copy()
     rng = np.random.default_rng(args.seed)
+    if args.motion == "scripted":   # fixed durations: the median of your demos at this speed
+        lens = [R.retarget(trajs[n], metas[n], T, home, basket_xy, args.speed)[0] for n in trajs]
+        med_reach = int(np.median([len(pl["reach"]) for pl in lens]))
+        med_carry = int(np.median([len(pl["carry"]) for pl in lens]))
+        print(f"scripted motion: reach {med_reach} steps, carry {med_carry} steps")
 
     ds = LeRobotDataset.create(repo_id=args.repo_id, fps=R.CTRL_HZ, features=FEATURES, root=out,
                                robot_type="panda", use_videos=True)
     index, skipped = [], []
     for n in names:
         plan0, info0 = R.retarget(trajs[n], metas[n], T, home, basket_xy, args.speed)
+        if args.motion == "scripted":
+            plan0, info0 = scripted_plan(plan0, info0, home, med_reach, med_carry)
         variants = []
         if args.placement == "human":
             # where your hand found the bottle (+ optional random nudges of up to 3 cm)
@@ -169,7 +209,8 @@ def main():
     ds.finalize()
 
     (out / "episode_sources.json").write_text(json.dumps(
-        {"speed": args.speed, "augment": args.augment, "placement": args.placement, "seed": args.seed,
+        {"speed": args.speed, "augment": args.augment, "placement": args.placement, "motion": args.motion,
+         "seed": args.seed,
          "init_state": args.init_state,
          "transform": T, "skipped": skipped, "episodes": index}, indent=2))
     frames = sum(e["frames"] for e in index)
