@@ -131,3 +131,26 @@ lerobot-eval \
   --eval.n_episodes=50 --eval.batch_size=10 --seed=1000 \
   --rename_map='{"observation.images.image": "observation.images.camera1", "observation.images.image2": "observation.images.camera2"}'
 ```
+
+## Running on a UCL GPU workstation (no admin rights)
+
+Start of a session:
+
+```bash
+cd /scratch0/$USER && git clone https://github.com/YOUR_GITHUB/Real2Sim-Task.git   # or: cd Real2Sim-Task && git pull
+cd Real2Sim-Task && bash setup/install_ucl.sh          # 15-25 min; reuses saved package versions
+source ~/.bashrc && conda activate humanoid
+hf auth login && wandb login                           # once per machine
+```
+
+One experiment (dataset -> training -> evaluation), inside `tmux`:
+
+```bash
+bash setup/run_experiment.sh HF_USERNAME scripted --motion scripted --placement human
+```
+
+End of a session (saves versions, results, logs to git; models and videos to Hugging Face):
+
+```bash
+bash setup/backup_session.sh HF_USERNAME
+```

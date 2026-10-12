@@ -41,7 +41,7 @@ COMMON=(
 )
 
 if [[ "$ONLY" == *A* ]]; then
-  echo ">> A: training $A_NAME on the phone-video demos ($A_REPO)"
+  echo ">> A: training $A_NAME on $A_REPO"
   lerobot-train "${COMMON[@]}" \
     --dataset.repo_id="$A_REPO" "${A_ROOT_ARGS[@]}" \
     --output_dir="outputs/train/$A_NAME" --job_name="$A_NAME" \
