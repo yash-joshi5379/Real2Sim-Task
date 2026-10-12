@@ -10,7 +10,7 @@
 #          outputs/eval/results.md (the table, ready for the README)
 set -uo pipefail
 
-RUNS="${RUNS:-smolvla_phone smolvla_phone_spawn4 smolvla_scripted smolvla_libero_ref}"
+RUNS="${RUNS:-smolvla_phone smolvla_phone_spawn4 smolvla_scripted smolvla_phone_eval smolvla_scripted_eval smolvla_libero_ref}"
 CKPTS="${CKPTS:-last}"
 EPISODES="${EPISODES:-50}"
 mkdir -p outputs/eval
@@ -40,6 +40,8 @@ from pathlib import Path
 names = {"smolvla_phone": "A: demos from phone video",
          "smolvla_phone_spawn4": "A2: phone video, ketchup in spawn region x4",
          "smolvla_scripted": "C: scripted motion, same pipeline (control)",
+         "smolvla_phone_eval": "D: phone video, ketchup at the eval spot, all 50 layouts",
+         "smolvla_scripted_eval": "C2: scripted motion, ketchup at the eval spot, all 50 layouts",
          "smolvla_libero_ref": "B: LIBERO robot demos"}
 rows = []
 for f in sorted(Path("outputs/eval").glob("*/eval_info.json")):

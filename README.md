@@ -149,6 +149,12 @@ One experiment (dataset -> training -> evaluation), inside `tmux`:
 bash setup/run_experiment.sh HF_USERNAME scripted --motion scripted --placement human
 ```
 
+Runs D and C2 (ketchup at the evaluation spot, all 50 layouts), then a backup, in one go (~4 h):
+
+```bash
+bash setup/next_session.sh HF_USERNAME
+```
+
 End of a session (saves versions, results, logs to git; models and videos to Hugging Face):
 
 ```bash

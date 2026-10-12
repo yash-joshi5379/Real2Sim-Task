@@ -22,11 +22,20 @@ Ketchup placement:
   --placement spawn  the ketchup starts at random points inside LIBERO's own spawn
                      region (a 5x5 cm area, where evaluation puts it), 1 + K copies per
                      demo. Same human motion, bent to meet the ketchup.
+  --placement eval   the ketchup starts exactly where all 50 evaluation layouts put it
+                     (-0.12, -0.24); LIBERO's own demos (run B) also all have it there.
+
+Starting layout (--init-state): a number uses that one LIBERO layout for every episode
+(default 0); "all" cycles through the 50 layouts (robot start pose differs by ~1 cm,
+basket by ~1 cm), as LIBERO's own demos do.
+
+--dry-run replays every episode without cameras and reports success, writing nothing.
 
 Usage:
     python src/make_dataset.py --speed 1.3                    # 54 episodes
     python src/make_dataset.py --speed 1.3 --placement spawn --augment 3 \\
         --out data/lerobot/ketchup_from_phone_spawn4 --repo-id local/ketchup_from_phone_spawn4
+    python src/make_dataset.py --placement eval --init-state all --dry-run
 """
 
 import argparse
@@ -45,6 +54,8 @@ TAIL_AFTER_SUCCESS = 10            # steps kept after the ketchup lands (gripper
 # LIBERO's spawn region for the ketchup (target_object_region in the task's BDDL file), xy in m
 SPAWN_LO = np.array([-0.145, -0.265])
 SPAWN_HI = np.array([-0.095, -0.215])
+# where the ketchup actually is in all 50 evaluation layouts (measured; identical in each)
+EVAL_SPOT = np.array([-0.12, -0.24])
 
 FEATURES = {
     "observation.images.image": {"dtype": "video", "shape": (IMG, IMG, 3),
@@ -136,18 +147,17 @@ def main():
     p.add_argument("--augment", type=int, default=0, help="extra replays per demo with the ketchup moved")
     p.add_argument("--motion", choices=["human", "scripted"], default="human",
                    help="scripted: control experiment with smooth standard reach/carry paths")
-    p.add_argument("--placement", choices=["human", "spawn"], default="human",
+    p.add_argument("--placement", choices=["human", "spawn", "eval"], default="human",
                    help="human: ketchup where your hand found the bottle; spawn: random points in "
-                        "LIBERO's ketchup spawn region (where evaluation puts it)")
+                        "LIBERO's ketchup spawn region; eval: exactly where evaluation puts it")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--init-state", type=int, default=0)
+    p.add_argument("--init-state", default="0", help='layout number, or "all" to cycle through the 50')
+    p.add_argument("--dry-run", action="store_true", help="replay without cameras, report success, write nothing")
     p.add_argument("--overwrite", action="store_true")
     args = p.parse_args()
 
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
     out = Path(args.out)
-    if out.exists():
+    if not args.dry_run and out.exists():
         if not args.overwrite:
             sys.exit(f"{out} exists; pass --overwrite to replace it")
         shutil.rmtree(out)
@@ -160,52 +170,72 @@ def main():
     if args.episodes:
         names = [n for n in names if n in args.episodes]
 
-    env, inits, language = R.make_env(IMG, cameras=True)
-    init_state = inits[args.init_state]
-    home = R.reset_with_ketchup(env, init_state, R.KETCHUP_SPAWN)["robot0_eef_pos"].copy()
-    basket_xy = env.env.sim.data.get_joint_qpos("basket_1_joint0")[:2].copy()
+    env, inits, language = R.make_env(IMG, cameras=not args.dry_run)
+    layouts = {}
+
+    def layout(i):
+        """Robot start position and basket position in LIBERO layout i."""
+        if i not in layouts:
+            home = R.reset_with_ketchup(env, inits[i], R.KETCHUP_SPAWN)["robot0_eef_pos"].copy()
+            layouts[i] = (home, env.env.sim.data.get_joint_qpos("basket_1_joint0")[:2].copy())
+        return layouts[i]
+
     rng = np.random.default_rng(args.seed)
     if args.motion == "scripted":   # fixed durations: the median of your demos at this speed
-        lens = [R.retarget(trajs[n], metas[n], T, home, basket_xy, args.speed)[0] for n in trajs]
+        home0, basket0 = layout(0)
+        lens = [R.retarget(trajs[n], metas[n], T, home0, basket0, args.speed)[0] for n in trajs]
         med_reach = int(np.median([len(pl["reach"]) for pl in lens]))
         med_carry = int(np.median([len(pl["carry"]) for pl in lens]))
         print(f"scripted motion: reach {med_reach} steps, carry {med_carry} steps")
 
-    ds = LeRobotDataset.create(repo_id=args.repo_id, fps=R.CTRL_HZ, features=FEATURES, root=out,
-                               robot_type="panda", use_videos=True)
-    index, skipped = [], []
+    ds = None
+    if not args.dry_run:
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+        ds = LeRobotDataset.create(repo_id=args.repo_id, fps=R.CTRL_HZ, features=FEATURES, root=out,
+                                   robot_type="panda", use_videos=True)
+    index, skipped, count = [], [], 0
     for n in names:
-        plan0, info0 = R.retarget(trajs[n], metas[n], T, home, basket_xy, args.speed)
-        if args.motion == "scripted":
-            plan0, info0 = scripted_plan(plan0, info0, home, med_reach, med_carry)
-        variants = []
-        if args.placement == "human":
-            # where your hand found the bottle (+ optional random nudges of up to 3 cm)
-            variants.append((plan0, info0, [0.0, 0.0]))
-            for _ in range(args.augment):
-                d = rng.uniform(-0.03, 0.03, size=2)
-                variants.append((*shift_plan(plan0, info0, d), d.tolist()))
-        else:
-            # "spawn": the ketchup at random points inside LIBERO's own spawn region, the
-            # region evaluation layouts use; your motion bends to meet it (1 + augment copies)
-            for _ in range(1 + args.augment):
-                target = rng.uniform(SPAWN_LO, SPAWN_HI)
-                d = target - np.array(info0["ketchup_xy"])
-                variants.append((*shift_plan(plan0, info0, d), d.tolist()))
-        for v, (plan, info, d) in enumerate(variants):
-            steps, res = record_episode(env, init_state, plan, info)
+        for v in range(1 + args.augment):
+            li = count % len(inits) if args.init_state == "all" else int(args.init_state)
+            count += 1
+            home, basket_xy = layout(li)
+            plan, info = R.retarget(trajs[n], metas[n], T, home, basket_xy, args.speed)
+            if args.motion == "scripted":
+                plan, info = scripted_plan(plan, info, home, med_reach, med_carry)
+            if args.placement == "human":
+                # where your hand found the bottle (+ optional random nudges of up to 3 cm)
+                d = np.zeros(2) if v == 0 else rng.uniform(-0.03, 0.03, size=2)
+            elif args.placement == "spawn":
+                # random points in LIBERO's spawn region; your motion bends to meet the ketchup
+                d = rng.uniform(SPAWN_LO, SPAWN_HI) - np.array(info["ketchup_xy"])
+            else:
+                # exactly where every evaluation layout (and every LIBERO demo) has the ketchup
+                d = EVAL_SPOT - np.array(info["ketchup_xy"])
+            if np.any(d != 0):
+                plan, info = shift_plan(plan, info, d)
             tag = n if v == 0 else f"{n}+aug{v}"
+            if args.dry_run:
+                res = R.run_episode(env, inits[li], plan, info)
+                steps = None if not res["success"] else [None] * (res["success_step"] + 1 + TAIL_AFTER_SUCCESS)
+            else:
+                steps, res = record_episode(env, inits[li], plan, info)
             if steps is None:
                 skipped.append(tag)
                 print(f"{tag}: replay failed, skipped")
                 continue
-            for frame in steps:
-                ds.add_frame({**frame, "task": language})
-            ds.save_episode()
-            index.append({"episode_index": len(index), "source_demo": n, "variant": v,
-                          "ketchup_shift_m": [round(x, 4) for x in d], "frames": len(steps),
+            if ds is not None:
+                for frame in steps:
+                    ds.add_frame({**frame, "task": language})
+                ds.save_episode()
+            index.append({"episode_index": len(index), "source_demo": n, "variant": v, "layout": li,
+                          "ketchup_shift_m": [round(float(x), 4) for x in d], "frames": len(steps),
                           "success_step": res["success_step"]})
-            print(f"{tag}: {len(steps)} frames (success at step {res['success_step']})")
+            print(f"{tag}: layout {li}, {len(steps)} frames (success at step {res['success_step']})")
+    frames = sum(e["frames"] for e in index)
+    if args.dry_run:
+        print(f"\ndry run: {len(index)}/{len(index) + len(skipped)} replays succeed, {frames} frames "
+              f"(longest {max(e['frames'] for e in index)}); nothing written")
+        return
     ds.finalize()
 
     (out / "episode_sources.json").write_text(json.dumps(
@@ -213,7 +243,6 @@ def main():
          "seed": args.seed,
          "init_state": args.init_state,
          "transform": T, "skipped": skipped, "episodes": index}, indent=2))
-    frames = sum(e["frames"] for e in index)
     print(f"\n{len(index)} episodes, {frames} frames -> {out}  (skipped {len(skipped)})")
 
 
