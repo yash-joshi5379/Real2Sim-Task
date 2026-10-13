@@ -5,6 +5,12 @@
 | B: LIBERO robot demos | last | 43/50 | 86% | 74-93% |
 | A: demos from phone video | 010000 | 11/50 | 22% | 13-35% |
 | A: demos from phone video | 015000 | 11/50 | 22% | 13-35% |
+| D: phone video, ketchup at the eval spot, all 50 layouts | 010000 | 10/50 | 20% | 11-33% |
+| D: phone video, ketchup at the eval spot, all 50 layouts | last | 25/50 | 50% | 37-63% |
 | A: demos from phone video | last | 9/50 | 18% | 10-31% |
 | A2: phone video, ketchup in spawn region x4 | 010000 | 11/50 | 22% | 13-35% |
 | A2: phone video, ketchup in spawn region x4 | last | 11/50 | 22% | 13-35% |
+| C: scripted motion, same pipeline (control) | 010000 | 0/50 | 0% | 0-7% |
+| C2: scripted motion, ketchup at the eval spot, all 50 layouts | 010000 | 44/50 | 88% | 76-94% |
+| C2: scripted motion, ketchup at the eval spot, all 50 layouts | last | 49/50 | 98% | 90-100% |
+| C: scripted motion, same pipeline (control) | last | 0/50 | 0% | 0-7% |
