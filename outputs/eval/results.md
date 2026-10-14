@@ -19,6 +19,10 @@
 | D, trained 40k steps | last | 24/50 | 48% | 35-61% |
 | E: your paths, fixed smooth timing, eval spot, all layouts | 010000 | 10/50 | 20% | 11-33% |
 | E: your paths, fixed smooth timing, eval spot, all layouts | last | 15/50 | 30% | 19-44% |
+| G: average of your path shapes, eval spot, all layouts | 010000 | 48/50 | 96% | 87-99% |
+| G: average of your path shapes, eval spot, all layouts | last | 48/50 | 96% | 87-99% |
+| F: ACT (no language model) on D's data | 010000 | 10/50 | 20% | 11-33% |
+| F: ACT (no language model) on D's data | last | 9/50 | 18% | 10-31% |
 | B: LIBERO robot demos | 010000 | 35/50 | 70% | 56-81% |
 | B: LIBERO robot demos | 015000 | 41/50 | 82% | 69-90% |
 | B: LIBERO robot demos | last | 43/50 | 86% | 74-93% |
