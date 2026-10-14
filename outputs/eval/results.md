@@ -23,6 +23,8 @@
 | G: average of your path shapes, eval spot, all layouts | last | 48/50 | 96% | 87-99% |
 | F: ACT (no language model) on D's data | 010000 | 10/50 | 20% | 11-33% |
 | F: ACT (no language model) on D's data | last | 9/50 | 18% | 10-31% |
+| H: as D, hand-tracking jitter smoothed out | 010000 | 12/50 | 24% | 14-37% |
+| H: as D, hand-tracking jitter smoothed out | last | 26/50 | 52% | 39-65% |
 | B: LIBERO robot demos | 010000 | 35/50 | 70% | 56-81% |
 | B: LIBERO robot demos | 015000 | 41/50 | 82% | 69-90% |
 | B: LIBERO robot demos | last | 43/50 | 86% | 74-93% |
