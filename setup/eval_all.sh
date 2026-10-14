@@ -10,7 +10,7 @@
 #          outputs/eval/results.md (the table, ready for the README)
 set -uo pipefail
 
-RUNS="${RUNS:-smolvla_phone smolvla_phone_spawn4 smolvla_scripted smolvla_phone_eval smolvla_scripted_eval smolvla_libero_ref}"
+RUNS="${RUNS:-smolvla_phone smolvla_phone_spawn4 smolvla_scripted smolvla_phone_eval smolvla_phone_eval4 smolvla_scripted_eval smolvla_libero_ref}"
 CKPTS="${CKPTS:-last}"
 EPISODES="${EPISODES:-50}"
 mkdir -p outputs/eval
@@ -41,10 +41,18 @@ names = {"smolvla_phone": "A: demos from phone video",
          "smolvla_phone_spawn4": "A2: phone video, ketchup in spawn region x4",
          "smolvla_scripted": "C: scripted motion, same pipeline (control)",
          "smolvla_phone_eval": "D: phone video, ketchup at the eval spot, all 50 layouts",
+         "smolvla_phone_eval4": "D4: as D, each demo replayed in 4 layouts (216 episodes)",
          "smolvla_scripted_eval": "C2: scripted motion, ketchup at the eval spot, all 50 layouts",
-         "smolvla_libero_ref": "B: LIBERO robot demos"}
+         "smolvla_phone_eval_n10": "D, re-planning every 10 steps",
+         "smolvla_phone_eval_n5": "D, re-planning every 5 steps",
+         "smolvla_phone_eval_40k": "D, trained 40k steps",
+         "smolvla_phone_timed": "E: your paths, fixed smooth timing, eval spot, all layouts",
+         "smolvla_libero_ref": "B: LIBERO robot demos",
+         "smolvla_libero_ref_n10": "B, re-planning every 10 steps"}
 rows = []
-for f in sorted(Path("outputs/eval").glob("*/eval_info.json")):
+order = list(names)
+for f in sorted(Path("outputs/eval").glob("*/eval_info.json"),
+              key=lambda f: (order.index(f.parent.name.rpartition("_")[0]) if f.parent.name.rpartition("_")[0] in order else 99, f.parent.name)):
     o = json.loads(f.read_text())["overall"]
     run, _, ck = f.parent.name.rpartition("_")
     lo, hi = o["pc_success_ci95"]
