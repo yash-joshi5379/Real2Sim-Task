@@ -53,6 +53,8 @@ names = {"smolvla_phone": "A: demos from phone video",
          "smolvla_phone_blend10": "G: average of your path shapes, eval spot, all layouts",
          "smolvla_phone_blend05": "G50: paths 50% towards the average, eval spot, all layouts",
          "act_phone_eval": "F: ACT (no language model) on D's data",
+         "smolvla_phone_smooth": "H: as D, hand-tracking jitter smoothed out",
+         "smolvla_phone_dart": "I: as H, + 3 recovery copies per demo (pushed off course), 40k steps",
          "smolvla_libero_ref": "B: LIBERO robot demos",
          "smolvla_libero_ref_n10": "B, re-planning every 10 steps"}
 rows = []

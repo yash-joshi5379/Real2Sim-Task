@@ -172,7 +172,27 @@ def blend_paths(plans, alpha, m=200):
             pl[key] = line + (1 - alpha) * own_dev + alpha * resample(mean_dev, n)
 
 
-def record_episode(env, init_state, plan, info):
+def smooth_paths(plan, seconds):
+    """Remove hand-tracking jitter: a Savitzky-Golay filter over ~`seconds` of each path.
+
+    Start and end points are put back exactly, so grasp and release don't move.
+    """
+    from scipy.signal import savgol_filter
+
+    plan = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in plan.items()}
+    for key in ("reach", "carry"):
+        x = plan[key]
+        w = int(seconds * R.CTRL_HZ) | 1                  # odd window length
+        if len(x) <= w or w < 5:
+            continue
+        sm = savgol_filter(x, w, 2, axis=0)
+        ramp = np.linspace(0, 1, len(x))[:, None]          # spread the end corrections linearly
+        sm += (1 - ramp) * (x[0] - sm[0]) + ramp * (x[-1] - sm[-1])
+        plan[key] = sm
+    return plan
+
+
+def record_episode(env, init_state, plan, info, noise=None):
     """Replay with cameras on; return per-step frames, or None if the replay failed."""
     from robosuite.utils import transform_utils as tu
 
@@ -187,7 +207,7 @@ def record_episode(env, init_state, plan, info):
             "action": np.asarray(action, dtype=np.float32),
         })
 
-    res = R.run_episode(env, init_state, plan, info, record=False, hook=hook)
+    res = R.run_episode(env, init_state, plan, info, record=False, hook=hook, noise=noise)
     if not res["success"] or res["success_step"] is None:
         return None, res
     return steps[: res["success_step"] + 1 + TAIL_AFTER_SUCCESS], res
@@ -207,6 +227,12 @@ def main():
     p.add_argument("--blend", type=float, default=0.0,
                    help="0..1: pull each of your reach/carry paths towards the average of all your paths "
                         "(0 = your own path, 1 = the average path, keeping each demo's own timing)")
+    p.add_argument("--smooth", type=float, default=0.0,
+                   help="seconds: smooth your reach and carry paths to remove hand-tracking jitter (e.g. 0.75)")
+    p.add_argument("--noise", type=float, default=0.0,
+                   help="for the --augment copies: push the arm off your path during reach and carry "
+                        "(std in action units, e.g. 0.3) and record the corrections, so the policy "
+                        "learns to recover (DART-style)")
     p.add_argument("--placement", choices=["human", "spawn", "eval"], default="human",
                    help="human: ketchup where your hand found the bottle; spawn: random points in "
                         "LIBERO's ketchup spawn region; eval: exactly where evaluation puts it")
@@ -274,6 +300,8 @@ def main():
             else:
                 # exactly where every evaluation layout (and every LIBERO demo) has the ketchup
                 d = EVAL_SPOT - np.array(info["ketchup_xy"])
+            if args.smooth > 0:
+                plan = smooth_paths(plan, args.smooth)
             if np.any(d != 0):
                 plan, info = shift_plan(plan, info, d)
             jobs.append((n, v, li, plan, info, d))
@@ -285,11 +313,14 @@ def main():
     index, skipped = [], []
     for n, v, li, plan, info, d in jobs:
         tag = n if v == 0 else f"{n}+aug{v}"
+        # the first copy of each demo is clean; augment copies get pushed off course if --noise
+        noise = (args.noise, np.random.default_rng([args.seed, len(index) + len(skipped)])) \
+            if args.noise > 0 and v > 0 else None
         if args.dry_run:
-            res = R.run_episode(env, inits[li], plan, info)
+            res = R.run_episode(env, inits[li], plan, info, noise=noise)
             steps = None if not res["success"] else [None] * (res["success_step"] + 1 + TAIL_AFTER_SUCCESS)
         else:
-            steps, res = record_episode(env, inits[li], plan, info)
+            steps, res = record_episode(env, inits[li], plan, info, noise=noise)
         if steps is None:
             skipped.append(tag)
             print(f"{tag}: replay failed, skipped")
@@ -311,7 +342,7 @@ def main():
 
     (out / "episode_sources.json").write_text(json.dumps(
         {"speed": args.speed, "augment": args.augment, "placement": args.placement, "motion": args.motion,
-         "blend": args.blend,
+         "blend": args.blend, "smooth": args.smooth, "noise": args.noise,
          "seed": args.seed,
          "init_state": args.init_state,
          "transform": T, "skipped": skipped, "episodes": index}, indent=2))

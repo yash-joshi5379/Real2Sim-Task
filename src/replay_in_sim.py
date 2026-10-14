@@ -227,10 +227,13 @@ def rot_action(cur_quat_xyzw, target_R):
 class Runner:
     """Steps the env towards targets, logging actions/states (and frames)."""
 
-    def __init__(self, env, obs, record, hook=None):
+    def __init__(self, env, obs, record, hook=None, noise=None):
         from robosuite.utils import transform_utils as tu
 
         self.tu, self.env, self.obs, self.record, self.hook = tu, env, obs, record, hook
+        # noise = (std, rng): push the arm off course during the human-driven phases, while the
+        # recorded action stays the clean correction from wherever the arm actually is
+        self.noise, self.ou = noise, np.zeros(3)
         self.down_R = tu.quat2mat(obs["robot0_eef_quat"])     # keep the starting, pointing-down orientation
         self.actions, self.states, self.frames, self.phases = [], [], [], []
         self.success_step = None
@@ -252,7 +255,12 @@ class Runner:
         self.phases.append(phase)
         if self.hook is not None:            # e.g. make_dataset.py records (observation, action) here
             self.hook(o, a, phase)
-        self.obs, _, _, _ = self.env.step(a.tolist())
+        a_exec = a.copy()
+        if self.noise is not None and phase in (0, 4):         # your reach and carry only
+            std, rng = self.noise
+            self.ou = 0.85 * self.ou + np.sqrt(1 - 0.85**2) * rng.normal(0, std, 3)   # smooth drift
+            a_exec[:3] = np.clip(a[:3] + self.ou, -1, 1)
+        self.obs, _, _, _ = self.env.step(a_exec.tolist())
         if self.success_step is None and self.env.check_success():
             self.success_step = len(self.actions) - 1
 
@@ -289,10 +297,10 @@ class Runner:
 PHASES = ["reach (human)", "align", "descend", "close", "carry (human)", "settle", "release", "retreat"]
 
 
-def run_episode(env, init_state, plan, info, record=False, hook=None):
+def run_episode(env, init_state, plan, info, record=False, hook=None, noise=None):
     sp = info.get("speed", 1.0)                 # robot-side moves are sped up by the same factor
     obs = reset_with_ketchup(env, init_state, info["ketchup_xy"])
-    r = Runner(env, obs, record, hook)
+    r = Runner(env, obs, record, hook, noise)
     r.follow(plan["reach"], -1, 0)                                          # your reach
     r.settle(plan["pre_grasp"], -1, 1, tol=0.01, max_s=1.5)                # line up above the ketchup
     r.move(r.eef().copy(), plan["grasp"], 0.8 / sp, -1, 2)                  # straight down
