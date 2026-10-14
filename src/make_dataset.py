@@ -13,8 +13,9 @@ lerobot-eval feeds a policy, so the same policy config trains on both:
   action                      7-D delta end-effector + gripper, in [-1, 1]
   task                        "pick up the ketchup and place it in the basket"
 
-Motion (--motion): human (default) uses your reach and carry; scripted is a control
-experiment that swaps them for smooth standard-shape paths, keeping everything else.
+Motion (--motion): human (default) uses your reach and carry; timed keeps your paths'
+shapes but gives every demo the same smooth timing (median durations); scripted is a
+control experiment that swaps them for smooth standard-shape paths, keeping everything else.
 
 Ketchup placement:
   --placement human  (default) the ketchup starts where your hand found the bottle;
@@ -116,6 +117,29 @@ def scripted_plan(plan, info, home, reach_steps, carry_steps):
     return plan, dict(info)
 
 
+def retime(path, n):
+    """Same path shape, new timing: n steps with a smooth (minimum-jerk) speed profile.
+
+    Positions are re-sampled by distance travelled along your path, so pauses and
+    speed changes disappear but every bend and height change of the path is kept.
+    """
+    seg = np.linalg.norm(np.diff(path, axis=0), axis=1)
+    s = np.r_[0.0, np.cumsum(seg)]
+    if s[-1] < 1e-6:
+        return np.repeat(path[:1], max(n, 2), axis=0)
+    u = np.linspace(0, 1, max(n, 2))
+    target = s[-1] * (10 * u**3 - 15 * u**4 + 6 * u**5)
+    return np.stack([np.interp(target, s, path[:, k]) for k in range(3)], axis=1)
+
+
+def timed_plan(plan, info, reach_steps, carry_steps):
+    """Your reach and carry paths, played with the same fixed, smooth timing in every demo."""
+    plan = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in plan.items()}
+    plan["reach"] = retime(plan["reach"], reach_steps)
+    plan["carry"] = retime(plan["carry"], carry_steps)
+    return plan, dict(info)
+
+
 def record_episode(env, init_state, plan, info):
     """Replay with cameras on; return per-step frames, or None if the replay failed."""
     from robosuite.utils import transform_utils as tu
@@ -145,8 +169,9 @@ def main():
     p.add_argument("--episodes", nargs="+", help="e.g. ep_001 ep_002 (default: all)")
     p.add_argument("--speed", type=float, default=1.3)
     p.add_argument("--augment", type=int, default=0, help="extra replays per demo with the ketchup moved")
-    p.add_argument("--motion", choices=["human", "scripted"], default="human",
-                   help="scripted: control experiment with smooth standard reach/carry paths")
+    p.add_argument("--motion", choices=["human", "timed", "scripted"], default="human",
+                   help="timed: your paths with one fixed smooth timing; scripted: control experiment "
+                        "with smooth standard reach/carry paths")
     p.add_argument("--placement", choices=["human", "spawn", "eval"], default="human",
                    help="human: ketchup where your hand found the bottle; spawn: random points in "
                         "LIBERO's ketchup spawn region; eval: exactly where evaluation puts it")
@@ -181,12 +206,12 @@ def main():
         return layouts[i]
 
     rng = np.random.default_rng(args.seed)
-    if args.motion == "scripted":   # fixed durations: the median of your demos at this speed
+    if args.motion in ("scripted", "timed"):   # fixed durations: the median of your demos at this speed
         home0, basket0 = layout(0)
         lens = [R.retarget(trajs[n], metas[n], T, home0, basket0, args.speed)[0] for n in trajs]
         med_reach = int(np.median([len(pl["reach"]) for pl in lens]))
         med_carry = int(np.median([len(pl["carry"]) for pl in lens]))
-        print(f"scripted motion: reach {med_reach} steps, carry {med_carry} steps")
+        print(f"{args.motion} motion: reach {med_reach} steps, carry {med_carry} steps")
 
     ds = None
     if not args.dry_run:
@@ -202,6 +227,8 @@ def main():
             plan, info = R.retarget(trajs[n], metas[n], T, home, basket_xy, args.speed)
             if args.motion == "scripted":
                 plan, info = scripted_plan(plan, info, home, med_reach, med_carry)
+            elif args.motion == "timed":
+                plan, info = timed_plan(plan, info, med_reach, med_carry)
             if args.placement == "human":
                 # where your hand found the bottle (+ optional random nudges of up to 3 cm)
                 d = np.zeros(2) if v == 0 else rng.uniform(-0.03, 0.03, size=2)
