@@ -140,6 +140,38 @@ def timed_plan(plan, info, reach_steps, carry_steps):
     return plan, dict(info)
 
 
+def resample(path, n):
+    """A path re-sampled to n points evenly spaced in time (keeps its own speed profile)."""
+    t = np.linspace(0, 1, len(path))
+    u = np.linspace(0, 1, max(n, 2))
+    return np.stack([np.interp(u, t, path[:, k]) for k in range(3)], axis=1)
+
+
+def blend_paths(plans, alpha, m=200):
+    """Pull every reach and carry towards the average of all of them (in place).
+
+    Each path is split into its straight line from start to end plus its sideways/vertical
+    deviation from that line. The deviations are averaged over normalised time (the mean of
+    your 54 path shapes, so still your motion) and mixed into each path. Starts and ends are
+    unchanged, so the robot still begins at home and grasps/releases exactly where it did,
+    and each demo keeps its own duration (its speed along the path is blended the same way).
+    """
+    for key in ("reach", "carry"):
+        ends = np.array([[pl[key][0], pl[key][-1]] for pl in plans])
+        # average shape relative to each path's own straight line from start to end
+        dev = []
+        for pl in plans:
+            q = resample(pl[key], m)
+            line = q[0] + np.linspace(0, 1, m)[:, None] * (q[-1] - q[0])
+            dev.append(q - line)
+        mean_dev = np.mean(dev, axis=0)
+        for pl, (a, b) in zip(plans, ends):
+            n = len(pl[key])
+            line = a + np.linspace(0, 1, n)[:, None] * (b - a)
+            own_dev = pl[key] - line
+            pl[key] = line + (1 - alpha) * own_dev + alpha * resample(mean_dev, n)
+
+
 def record_episode(env, init_state, plan, info):
     """Replay with cameras on; return per-step frames, or None if the replay failed."""
     from robosuite.utils import transform_utils as tu
@@ -172,6 +204,9 @@ def main():
     p.add_argument("--motion", choices=["human", "timed", "scripted"], default="human",
                    help="timed: your paths with one fixed smooth timing; scripted: control experiment "
                         "with smooth standard reach/carry paths")
+    p.add_argument("--blend", type=float, default=0.0,
+                   help="0..1: pull each of your reach/carry paths towards the average of all your paths "
+                        "(0 = your own path, 1 = the average path, keeping each demo's own timing)")
     p.add_argument("--placement", choices=["human", "spawn", "eval"], default="human",
                    help="human: ketchup where your hand found the bottle; spawn: random points in "
                         "LIBERO's ketchup spawn region; eval: exactly where evaluation puts it")
@@ -218,7 +253,8 @@ def main():
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
         ds = LeRobotDataset.create(repo_id=args.repo_id, fps=R.CTRL_HZ, features=FEATURES, root=out,
                                    robot_type="panda", use_videos=True)
-    index, skipped, count = [], [], 0
+    # pass 1: build every episode's plan
+    jobs, count = [], 0
     for n in names:
         for v in range(1 + args.augment):
             li = count % len(inits) if args.init_state == "all" else int(args.init_state)
@@ -240,24 +276,32 @@ def main():
                 d = EVAL_SPOT - np.array(info["ketchup_xy"])
             if np.any(d != 0):
                 plan, info = shift_plan(plan, info, d)
-            tag = n if v == 0 else f"{n}+aug{v}"
-            if args.dry_run:
-                res = R.run_episode(env, inits[li], plan, info)
-                steps = None if not res["success"] else [None] * (res["success_step"] + 1 + TAIL_AFTER_SUCCESS)
-            else:
-                steps, res = record_episode(env, inits[li], plan, info)
-            if steps is None:
-                skipped.append(tag)
-                print(f"{tag}: replay failed, skipped")
-                continue
-            if ds is not None:
-                for frame in steps:
-                    ds.add_frame({**frame, "task": language})
-                ds.save_episode()
-            index.append({"episode_index": len(index), "source_demo": n, "variant": v, "layout": li,
-                          "ketchup_shift_m": [round(float(x), 4) for x in d], "frames": len(steps),
-                          "success_step": res["success_step"]})
-            print(f"{tag}: layout {li}, {len(steps)} frames (success at step {res['success_step']})")
+            jobs.append((n, v, li, plan, info, d))
+    if args.blend > 0:
+        blend_paths([j[3] for j in jobs], args.blend)
+        print(f"blended every reach and carry {args.blend:.0%} towards the average of your paths")
+
+    # pass 2: replay and record
+    index, skipped = [], []
+    for n, v, li, plan, info, d in jobs:
+        tag = n if v == 0 else f"{n}+aug{v}"
+        if args.dry_run:
+            res = R.run_episode(env, inits[li], plan, info)
+            steps = None if not res["success"] else [None] * (res["success_step"] + 1 + TAIL_AFTER_SUCCESS)
+        else:
+            steps, res = record_episode(env, inits[li], plan, info)
+        if steps is None:
+            skipped.append(tag)
+            print(f"{tag}: replay failed, skipped")
+            continue
+        if ds is not None:
+            for frame in steps:
+                ds.add_frame({**frame, "task": language})
+            ds.save_episode()
+        index.append({"episode_index": len(index), "source_demo": n, "variant": v, "layout": li,
+                      "ketchup_shift_m": [round(float(x), 4) for x in d], "frames": len(steps),
+                      "success_step": res["success_step"]})
+        print(f"{tag}: layout {li}, {len(steps)} frames (success at step {res['success_step']})")
     frames = sum(e["frames"] for e in index)
     if args.dry_run:
         print(f"\ndry run: {len(index)}/{len(index) + len(skipped)} replays succeed, {frames} frames "
@@ -267,6 +311,7 @@ def main():
 
     (out / "episode_sources.json").write_text(json.dumps(
         {"speed": args.speed, "augment": args.augment, "placement": args.placement, "motion": args.motion,
+         "blend": args.blend,
          "seed": args.seed,
          "init_state": args.init_state,
          "transform": T, "skipped": skipped, "episodes": index}, indent=2))

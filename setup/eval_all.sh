@@ -22,13 +22,16 @@ for run in $RUNS; do
     out="outputs/eval/${run}_${ck}"
     if [[ ! -d "$model" ]]; then echo "skip: $model not found"; continue; fi
     if [[ -f "$out/eval_info.json" ]]; then echo "skip: $out already evaluated"; continue; fi
+    # SmolVLA expects camera1/camera2; ACT uses the dataset's own camera names
+    rename=('--rename_map={"observation.images.image": "observation.images.camera1", "observation.images.image2": "observation.images.camera2"}')
+    [[ "$run" == act_* ]] && rename=()
     echo ">> evaluating $run @ $ck"
     lerobot-eval \
       --policy.path="$model" \
       --env.type=libero --env.task=libero_object --env.task_ids='[4]' \
       --env.observation_height=256 --env.observation_width=256 \
       --eval.n_episodes="$EPISODES" --eval.batch_size=10 --seed=1000 \
-      '--rename_map={"observation.images.image": "observation.images.camera1", "observation.images.image2": "observation.images.camera2"}' \
+      "${rename[@]}" \
       --output_dir="$out" 2>&1 | tee "$out.log"
   done
 done
@@ -47,6 +50,9 @@ names = {"smolvla_phone": "A: demos from phone video",
          "smolvla_phone_eval_n5": "D, re-planning every 5 steps",
          "smolvla_phone_eval_40k": "D, trained 40k steps",
          "smolvla_phone_timed": "E: your paths, fixed smooth timing, eval spot, all layouts",
+         "smolvla_phone_blend10": "G: average of your path shapes, eval spot, all layouts",
+         "smolvla_phone_blend05": "G50: paths 50% towards the average, eval spot, all layouts",
+         "act_phone_eval": "F: ACT (no language model) on D's data",
          "smolvla_libero_ref": "B: LIBERO robot demos",
          "smolvla_libero_ref_n10": "B, re-planning every 10 steps"}
 rows = []
