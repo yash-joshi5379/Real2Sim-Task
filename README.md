@@ -23,8 +23,51 @@ recorded from the robot's cameras, are the training data.*
 The policy learns the task from my videos alone. Using each demo's raw hand path gives 50%;
 averaging the shape of the 54 paths gives 96%, above the policy trained on LIBERO's own robot
 demos. Getting there took 12 training runs, including control experiments that showed *why* the
-first versions only reached ~20%. A short slide deck with the same story is in
-[docs/presentation.pdf](docs/presentation.pdf) (editable: `docs/presentation.pptx`).
+first versions only reached ~20%.
+
+**Slides:** the same story as a 13-slide deck. Open
+[docs/presentation.pptx](docs/presentation.pptx) to see the animations (GIFs) and slide transitions;
+[docs/presentation.pdf](docs/presentation.pdf) is a backup that shows still frames instead.
+
+## Repository structure
+
+```
+Real2Sim-Task/
+├── README.md
+├── requirements.txt               Python packages on top of LeRobot
+├── src/                           the pipeline, in the order it runs
+│   ├── cut_clips.py               long recordings -> one clip per demo (ffmpeg)
+│   ├── extract_trajectory.py      clip -> 3-D gripper path + gripper signal (ArUco, MediaPipe)
+│   ├── replay_in_sim.py           retarget a path onto the Panda and replay it in LIBERO
+│   ├── side_by_side.py            my demo | robot replay video
+│   ├── make_dataset.py            replays -> LeRobot dataset (all the options behind runs A-H)
+│   ├── reference_episodes.py      finds LIBERO's own demos of the task in lerobot/libero (run B)
+│   ├── results.py                 evaluation results -> table + chart
+│   └── plot_paths.py              the D vs G path figure
+├── setup/
+│   ├── install.sh                 environment (Linux, Windows via WSL2, macOS)
+│   ├── check_render.py            checks the simulator can render
+│   ├── run_experiment.sh          dataset -> training -> evaluation for one run (A ... H)
+│   ├── evaluate.sh                lerobot-eval on the task's 50 layouts
+│   ├── publish_hf.sh              uploads clips, datasets and models to the Hugging Face Hub
+│   ├── lerobot_commit.txt         the LeRobot version the results were produced with
+│   └── requirements-lock.txt      exact package versions of those runs
+├── data/
+│   ├── clips.csv                  start and end of each demo in my four recordings
+│   └── trajectories/              the 54 extracted paths (ep_001.npz/.json ... ep_054)
+├── outputs/
+│   └── eval/                      results of every run
+│       ├── results.md             all runs and checkpoints in one table
+│       └── <run>_<checkpoint>/eval_info.json
+└── docs/
+    ├── presentation.pptx          slides (use this one: animations and transitions)
+    ├── presentation.pdf           slides, static backup
+    └── media/                     figures and GIFs used in this README
+```
+
+Folders created when you run things (not in the repo): `data/raw/` (your long videos),
+`data/clips/`, `data/sim_replays/`, `data/lerobot/` (datasets), `outputs/train/` (checkpoints),
+`models/` (MediaPipe's hand model).
 
 ---
 
@@ -353,25 +396,3 @@ My clips can be downloaded to try steps 4 and 5:
 - **`torch.load` error about `weights_only`** when loading LIBERO's starting layouts: use the code
   in this repo (`load_init_states` in `src/replay_in_sim.py` handles torch ≥ 2.6).
 
----
-
-## Repository layout
-
-```
-src/cut_clips.py           long recordings -> one clip per demo (ffmpeg)
-src/extract_trajectory.py  clip -> 3-D gripper path + gripper signal (ArUco, MediaPipe)
-src/replay_in_sim.py       retarget a path onto the Panda and replay it in LIBERO
-src/side_by_side.py        my demo | robot replay video
-src/make_dataset.py        replays -> LeRobot dataset (all the options behind runs A-H)
-src/reference_episodes.py  finds LIBERO's own demos of the task in lerobot/libero (run B)
-src/results.py             evaluation results -> table + chart
-src/plot_paths.py          the D vs G path figure
-setup/install.sh           environment (Linux, WSL2, macOS)
-setup/run_experiment.sh    dataset -> training -> evaluation for one run
-setup/evaluate.sh          lerobot-eval on the 50 layouts
-setup/publish_hf.sh        uploads clips, datasets and models to the Hugging Face Hub
-data/clips.csv             start and end of each demo in my recordings
-data/trajectories/         the 54 extracted trajectories
-outputs/eval/              evaluation results of every run (eval_info.json)
-docs/                      figures and the slide deck
-```
