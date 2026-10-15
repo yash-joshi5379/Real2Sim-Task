@@ -1,23 +1,21 @@
-# Python
 __pycache__/
 *.pyc
-.ipynb_checkpoints/
-
-# Raw recordings and generated data (large; share via release/HF instead)
-data/
-outputs/
-*.mp4
-*.mov
-
-# Checkpoints
-checkpoints/
-wandb/
-*.pt
-*.safetensors
-
-# OS / editor
 .DS_Store
 .vscode/
+
+# large or regenerable data: only the timestamps and the extracted trajectories are kept
+data/*
+!data/clips.csv
+!data/trajectories/
+data/trajectories/cache/
 models/
-models/
-models/
+logs/
+wandb/
+
+# training outputs: only the evaluation summaries are kept (models are on Hugging Face)
+outputs/*
+!outputs/eval/
+outputs/eval/*/videos/
+*.mp4
+*.safetensors
+*.pt

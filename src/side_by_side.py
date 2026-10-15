@@ -1,12 +1,9 @@
-"""Side-by-side video: your phone clip (left) and the Panda replaying it in LIBERO (right).
+"""Side-by-side video: my phone demo (left) and the Panda replaying it in LIBERO (right).
 
-The two are time-aligned: while the robot follows your reach or carry, the left
-side plays the matching moment of your video; during robot-side steps (lining up,
-descending, closing the gripper, settling, lifting away) your video holds still on
-the matching frame. A caption shows which is which.
-
-Needs the sim replay to have been run with --video (it re-runs the episode here
-with rendering if the frames are not available).
+The two are time-aligned: while the robot follows the hand's reach or carry, the left
+side plays the matching moment of the video; during robot-side steps (lining up,
+descending, closing the gripper, arriving, lifting away) the video holds still.
+A caption under the robot says which of the two is happening.
 
 Usage:
     python src/side_by_side.py --episodes ep_029 ep_051
@@ -24,12 +21,12 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import replay_in_sim as R  # noqa: E402
 
-PHASE_TEXT = ["following your reach", "robot: lining up", "robot: descending", "robot: closing gripper",
-              "following your carry", "robot: arriving", "releasing", "robot: lifting away"]
+PHASE_TEXT = ["following my reach", "robot: lining up", "robot: descending", "robot: closing gripper",
+              "following my carry", "robot: arriving", "releasing", "robot: lifting away"]
 
 
 def human_frame_times(phase, t_lift, t_release, reach_start, speed=1.0):
-    """For each sim step, the time in your video to show."""
+    """For each sim step, the time in the phone video to show."""
     times, k_reach, k_carry, after = [], 0, 0, 0
     for p in phase:
         if p == 0:
@@ -85,7 +82,7 @@ def main():
     p.add_argument("--traj", default="data/trajectories")
     p.add_argument("--out", default="data/side_by_side")
     p.add_argument("--height", type=int, default=480, help="video height in pixels (even)")
-    p.add_argument("--speed", type=float, default=1.0, help="same --speed as used for replay_in_sim.py")
+    p.add_argument("--speed", type=float, default=1.3, help="same --speed as used for replay_in_sim.py")
     args = p.parse_args()
     import imageio
 
@@ -116,7 +113,7 @@ def main():
         for k, ph in enumerate(res["phase"]):
             sim = res["frames"][k][:, :256]                                   # agentview half
             sim = cv2.resize(sim, (args.height, args.height), interpolation=cv2.INTER_CUBIC)
-            left = label(human[k], "your demo (phone)")
+            left = label(human[k], "my demo (phone)")
             right = label(cv2.cvtColor(sim, cv2.COLOR_RGB2BGR), "Panda in LIBERO", PHASE_TEXT[ph])
             frames.append(cv2.cvtColor(np.hstack([left, right]), cv2.COLOR_BGR2RGB))
         verdict = "in the basket" if res["success"] else "not in the basket"

@@ -1,354 +1,377 @@
 # Real2Sim: teaching a simulated robot from phone videos of my hand
 
-I recorded myself picking up a bottle and dropping it in a box, 54 times, on a phone.
-This repo turns those videos into robot demonstrations for the LIBERO simulator
-(LIBERO-Object task 4: *"pick up the ketchup and place it in the basket"*), trains a
-vision-language-action model (SmolVLA) on them, and tests it on LIBERO's 50 standard
-starting layouts for that task.
+I filmed myself 54 times on a phone, picking up a bottle and dropping it in a box. This repo
+turns those videos into robot demonstrations in the LIBERO simulator (LIBERO-Object task 4,
+*"pick up the ketchup and place it in the basket"*), fine-tunes the SmolVLA vision-language-action
+model on them, and evaluates it the standard LIBERO way, on the task's 50 starting layouts.
 
-| Training data (SmolVLA, 20k steps) | Robot demos used | Success on LIBERO's 50 layouts |
+![my demo next to the robot replaying it](docs/media/human_to_robot.gif)
+
+*Left: one of my phone demos. Right: the Panda replaying it after retargeting. Replays like this,
+recorded from the robot's cameras, are the training data.*
+
+| Training data (SmolVLA, 20k steps) | Robot demos used | Success (50 layouts) |
 |---|---|---|
-| **G: my 54 phone videos, path shapes averaged across demos** | **0** | **96%** (48/50) |
-| D: my 54 phone videos, each demo's own path | 0 | 50% (25/50) |
-| B: LIBERO's own robot demos of the task (reference) | 45 | 86% (43/50) |
-| C2: my pipeline with idealised, scripted motion (control) | 0 | 98% (49/50) |
+| **G: my 54 phone demos, path shapes averaged across demos** | **0** | **96%** (48/50) |
+| D: my 54 phone demos, each with its own path | 0 | 50% (25/50) |
+| B: LIBERO's own robot demos of the same task (reference) | 45 | 86% (43/50) |
 
-**In one sentence:** a policy that never saw a robot demonstration learns the task from 54 phone
-videos; it succeeds 50% of the time when each demo keeps its own hand path, and **96%** (above
-LIBERO's own robot demos) once the demos' path shapes are averaged, because what held it back was
-how much a human hand's path varies from one demo to the next.
+![policy G doing the task in three layouts](docs/media/policy_G_success.gif)
 
-![one phone demo next to the robot replaying it](docs/media/human_to_robot.gif)
+*The trained policy (run G) in three of the evaluation layouts, real time. It never saw a robot demo.*
 
-*Left: one of my 54 phone demos. Right: the Panda in LIBERO replaying it after retargeting
-(replays like this, recorded with the robot's cameras, are the training data). The caption shows when the robot follows my hand and when it does a robot-side step.*
-
-![policy G completing the task in three different layouts](docs/media/policy_G_success.gif)
-
-*The trained policy (run G) on three of LIBERO's evaluation layouts, real time. It never saw a robot demonstration.*
+The policy learns the task from my videos alone. Using each demo's raw hand path gives 50%;
+averaging the shape of the 54 paths gives 96%, above the policy trained on LIBERO's own robot
+demos. Getting there took 12 training runs, including control experiments that showed *why* the
+first versions only reached ~20%. A short slide deck with the same story is in
+[docs/presentation.pdf](docs/presentation.pdf) (editable: `docs/presentation.pptx`).
 
 ---
 
 ## How it works
 
+![my recording setup](docs/media/setup_photo.jpg)
+
+*The setup: a protein-shake bottle stands in for the ketchup, a cardboard box for the basket,
+other objects are distractors. The printed ArUco marker (100 mm) gives the scale and the floor.*
+
 ```
-phone video ──► hand + bottle tracking ──► 3-D gripper path ──► retarget to the Panda
-   (54 demos)     (MediaPipe, ArUco)        (metres, on the floor)    (LIBERO coordinates)
+phone video ─► hand + bottle tracking ─► 3-D gripper path ─► retarget onto the Panda
+  54 clips     MediaPipe, ArUco, A4 sheet   metres, floor frame    LIBERO coordinates
                                                                          │
- evaluate on LIBERO's 50 layouts ◄── train SmolVLA ◄── LeRobot dataset ◄─┘ replay in LIBERO,
-                                                                          record cameras + actions
+ evaluate on LIBERO's 50 layouts ◄── fine-tune SmolVLA ◄── LeRobot dataset ◄── replay in LIBERO,
+                                                                              record cameras + actions
 ```
 
-1. **Recording.** A phone on a fixed stand films a carpet with distractor objects. A protein-shake
-   bottle stands in for the ketchup, a shallow box for the basket, and a 100 mm ArUco marker
-   (5x5 dictionary, ID 68) printed on A4 paper fixes the scale and the floor plane.
-   Four long recordings were cut into 54 clips (`data/clips.csv`).
-2. **Extraction** (`src/extract_trajectory.py`).
-   - The camera's focal length is estimated from the A4 sheet's edges; the camera pose comes from the marker.
-   - The bottle's start and drop points come from the difference between a clip's first and last frames.
-   - MediaPipe hand landmarks give the grasp point in every frame. Hands that don't move (my other hand, a foot)
-     are dropped by tracking each detection over time.
-   - Depth from a single camera is the hard part. While the bottle is carried, the hand's camera ray is
-     intersected with the vertical plane through the bottle's start and drop points. During the reach and
-     retreat, the marker-based depth is rescaled so it matches at the moments of lift and release.
-   - Each clip gives a time-stamped 3-D path, a gripper open/closed signal, and a debug image.
-     51/54 were clean; 3 grasped the bottle by the neck and were kept.
+**1. Recording.** Phone on a fixed stand, 30 fps, 54 demos in four long recordings,
+cut into one clip each with `data/clips.csv` (`src/cut_clips.py`).
 
-   ![extracted gripper path for one demo](docs/media/extraction_ep029.png)
+**2. Extraction** (`src/extract_trajectory.py`, CPU, ~40 s per clip).
+- Camera: the focal length is estimated from the edges of the A4 sheet the marker is printed on,
+  and the camera pose from the marker.
+- Bottle: its start and drop points come from the difference between the first and last frames;
+  a template tracker finds the moment of lift-off.
+- Hand: MediaPipe hand landmarks; the grasp point is the thumb-index midpoint. Detections that
+  don't move (my other hand, a foot) are thrown away.
+- Depth from one camera is the hard part. During the carry the hand's camera ray is intersected
+  with the vertical plane through the bottle's start and drop points, which is purely geometric.
+  For the reach, MediaPipe's metric hand model gives depth by PnP, rescaled to meet the carry
+  exactly at lift-off.
+- Output per clip: a time-stamped 3-D path, gripper open/closed, and a debug image.
+  51/54 clips were clean; the other 3 were grasped by the neck and kept.
 
-   *One demo after extraction: the tracked grasp point (colour = time, purple → yellow), its shadow on
-   the floor, where the bottle started and where it was dropped.*
-3. **Retargeting** (`src/replay_in_sim.py`).
-   - A similarity transform (scale 1.20, rotation −16.8°) maps the floor onto the table. It is fitted so the
-     average human grasp lands on the ketchup and the average release lands in the basket.
-   - Heights are rescaled: the real bottle is 19 cm, the sim ketchup 14.6 cm, and the basket rim 14.1 cm.
-   - The robot follows my hand's path for the reach and the carry (70% of all control steps).
-     Short robot-side steps handle what a phone can't measure precisely: line up above the
-     ketchup, descend, close, wait to arrive over the basket, open, lift away.
-4. **Dataset** (`src/make_dataset.py`). Every retargeted demo is replayed in LIBERO with both cameras on,
-   and each control step is recorded in exactly the format of LeRobot's own LIBERO data (`lerobot/libero`):
-   two 256x256 images, the 8-D robot state and the 7-D action. Only replays that succeed are kept (54/54 do).
-5. **Training and evaluation.** SmolVLA (`lerobot/smolvla_base`) is fine-tuned with identical settings for
-   every run (batch 32, 20k steps, seed 1000) and evaluated with `lerobot-eval` on all 50 layouts.
+![extracted gripper path for one demo](docs/media/extraction_ep029.png)
 
-## Results
+*One demo after extraction: tracked grasp point (colour = time), its shadow on the floor, where
+the bottle started and where it was dropped.*
 
-All runs: SmolVLA fine-tuned from `lerobot/smolvla_base`, batch 32, seed 1000, evaluated on the 50
-standard layouts of LIBERO-Object task 4. The interval is a 95% Wilson interval.
+**3. Retargeting** (`src/replay_in_sim.py`).
+- One similarity transform (scale 1.20, rotation −16.8°) maps my floor onto the table, fitted so
+  the average grasp lands on the ketchup and the average release in the basket.
+- Heights are rescaled: my bottle is 19 cm, the sim ketchup 14.6 cm, the basket rim 14.1 cm.
+- The robot follows my hand for the reach and the carry (70% of all control steps). Short
+  robot-side steps do what a phone can't measure precisely: line up above the ketchup, descend,
+  close, wait to be over the basket, open, lift away.
+- The arm is driven with LIBERO's own controller and action space (7-D delta end-effector, 20 Hz),
+  so a replay is exactly the kind of data a LIBERO policy is trained on. 54/54 replays succeed.
 
-| Run | What the demos are | Episodes | 10k steps | 20k steps (final) |
-|---|---|---|---|---|
-| B | LIBERO's own robot demos (reference) | 45 | 70% | **86%** (74–93%) |
-| A | my motion, bottle where my hand found it | 54 | 22% | 18% (10–31%) |
-| A2 | my motion, bottle at random spots in LIBERO's spawn area, x4 | 216 | 22% | 22% (13–35%) |
-| C | idealised motion, bottle where my hand found it (control) | 54 | 0% | 0% (0–7%) |
-| **D** | **my motion, bottle at the evaluation spot, all 50 layouts** | 54 | 20% | **50%** (37–63%) |
-| D4 | as D, each demo replayed in 4 layouts | 216 | 16% | 24% (14–37%) |
-| C2 | idealised motion, bottle at the evaluation spot, all 50 layouts (control) | 54 | 88% | **98%** (90–100%) |
-| D-40k | as D, trained 40k steps | 54 | 10%* | 48% (35–61%) |
-| E | my paths, with one fixed smooth timing for every demo | 54 | 20% | 30% (19–44%) |
-| **G** | **average of my 54 path shapes, each demo's own start, end and duration** | 54 | 96% | **96%** (87–99%) |
-| F | ACT instead of SmolVLA, on D's data | 54 | 20% | 18% (10–31%) |
-| H | as D, with hand-tracking jitter smoothed out (0.75 s filter) | 54 | 24% | 52% (39–65%) |
+**4. Dataset** (`src/make_dataset.py`). Every replay is recorded with both robot cameras in the
+format of LeRobot's LIBERO data (`lerobot/libero`): two 256×256 images, 8-D state, 7-D action,
+the task sentence. The same training and evaluation commands therefore work for my data and for
+LIBERO's.
 
-\* D-40k's learning rate decays more slowly (over 30k steps instead of 20k), so its 10k checkpoint isn't comparable with the others'.
-
-"Idealised motion" (C, C2) replaces my reach and carry with straight, smooth, fixed-duration
-moves (reach in 2.7 s; carry = lift, move across, lower) but keeps everything else from each demo:
-the grasp height, the release point and the robot-side steps.
-
-![success rate of every policy](docs/media/results.png)
-
-### What the results mean
-
-**1. The pipeline produces data a policy can learn very well.** With idealised motion, the full
-pipeline (retargeting, robot-side steps, action labels, dataset format) trains a policy to 98%,
-above LIBERO's own human-teleoperated demos (86%). This is close to a best case: those demos are
-perfectly consistent. But it rules out a bug in how the data is generated.
-
-**2. Where the bottle is matters more than anything else.** In all 50 evaluation layouts the
-ketchup is at exactly the same spot (−0.12, −0.24), and LIBERO's demos all have it there too. My
-first datasets put it wherever my hand found the bottle, typically 3 cm and up to 13 cm away.
-The policy then had to *find* a narrow bottle by sight from 54 examples; a 2–3 cm error knocks it
-over. Moving the bottle to the evaluation spot took idealised motion from 0% to 98% (C → C2) and my
-motion from 18% to 50% (A → D). A2 shows that spreading it over LIBERO's spawn area is not enough.
-
-**3. Human motion variation costs about half the successes.** D and C2 differ only in the motion,
-and score 50% against 98%. My 54 reaches and carries each take a different path at a different
-speed, so the policy learns a blurred average. D's failures look like that: hovering above the
-ketchup, slow or hesitant grasps, running out of time. It isn't a lack of training: twice
-the training steps (D-40k) gives 48%, the same as D within noise.
-
-Run E tested which part of that variation matters, the path's shape or its timing. It keeps every one of my paths but plays them all at the same smooth speed and duration.
-That did **not** help: 30%, against D's 50%. So the cost comes from *where* my hand goes (54
-different paths), not *how fast*. If anything, my natural timing helped. A likely reason: people
-slow down as they approach an object and before letting go, so the speed fits what the robot sees
-at that moment; a uniform schedule throws that away. (The difference between E and D is at the edge of what
-50 episodes can show, so I'd call this "no gain", not a proven loss.)
-
-It isn't tracking noise either. The tracked hand jitters by ~6 mm around a smooth curve during
-the reach (up to 2 cm), which is a lot next to the robot's ~11 mm per step. Run H filters that
-out and keeps my real path shapes: 52%, the same as D. So the variation that hurts is real
-variation in how I moved, not measurement error.
-
-**4. Repeating the same motions doesn't help.** D4 replays each of my 54 motions in 4 layouts
-that differ by about 1 cm. That adds frames, but no new behaviour, and with the same 20k training
-steps each frame is seen 4x less often. It scored 24%, below D. It was still improving (16% →
-24%), so it may have been undertrained, although training D for longer didn't help D; with one
-seed per run I can't separate the two effects.
-
-**5. Averaging the demos fixes it: 96% from phone video.** Run G keeps everything that is specific
-to each demo (where it starts, where the hand grasped and released, how long it took) but gives
-every demo the *average* shape of my 54 paths. Each path is split into the straight line from its
-start to its end, plus how it bends away from that line; the bends are averaged over normalised time
-and put back on each demo's own line. So the motion is still entirely mine (nothing is scripted),
-just made consistent. G reaches 96% already at 10k steps, close to the idealised control (98%) and
-above LIBERO's own robot demos (86%). This is the most useful result of the project: a small set of
-noisy human demos becomes very good training data once their shared shape is extracted and the
-demo-to-demo variation is removed. The trade-off: every demo now moves the same way, which suits
-this benchmark (the bottle is always in one place) but gives the policy less variety to draw on in
-a scene where things move.
-
-![the 54 robot paths in D and in G](docs/media/paths_D_vs_G.png)
-
-*The robot's gripper paths in the training data, all 54 demos. Left: D, each demo follows my own
-hand path. Right: G, every demo has the average shape but keeps its own start, end and timing.*
-
-**6. The pretrained VLA matters with this little data.** ACT, a small policy trained from scratch
-(apart from an ImageNet image encoder), got 18% on D's data, against SmolVLA's 50%.
-
-### Side test: re-planning more often
-
-SmolVLA predicts 50 actions at a time and normally plays all of them (2.5 s) before looking again.
-Re-evaluating D's final model with shorter re-planning intervals:
-
-| Re-plans every | 50 steps (default) | 10 steps | 5 steps |
-|---|---|---|---|
-| D | 50% | 58% | 42% |
-
-The differences are within the noise of a 50-episode test, so all main results use the default.
-
-### Failure analysis (first 10 evaluation videos, final checkpoints)
-
-![three ways run D fails](docs/media/failure_modes_D.png)
-
-*The three ways run D fails, from its evaluation videos.*
-
-| | Hovers / drifts, never grasps | Knocks the bottle over | Grasps, but drops it beside the basket or runs out of time | Success |
-|---|---|---|---|---|
-| C | 7 | 2 | 1 | 0 |
-| D | 3 | 2 | 2 | 3 |
-| E | 4 | 0 | 4 | 2 |
-
-For C and D, the grasp is the hard part: once the ketchup is held, the carry and release usually work.
-E is different: it knocked nothing over, but lost more bottles during the carry (dropped beside the basket
-or still carrying when time ran out). With 10 videos per run this is a hint, not a measurement.
-
-## What worked and what didn't
-
-Worked:
-- **Hand-ray / plane intersection for depth.** Marker-based depth from a single camera was off by up to 40%
-  while carrying; intersecting the hand's camera ray with the vertical plane of the carry fixed it.
-- **Robot-side grasp and release steps.** Copying the hand's exact grasp failed (see below). Letting the
-  human motion drive the large movements while the robot does the last few centimetres made 54/54 replays succeed.
-- **Matching the evaluation distribution exactly.** The biggest single gain came from this (finding 2).
-- **Control experiments.** C and C2 were what turned "the policy gets ~20%" into a diagnosis.
-- **Averaging the path shapes of all demos** (G): 50% → 96%.
-
-Didn't work at first:
-- **Heights copied 1:1** failed: the real bottle is taller than the sim ketchup and the box is lower than the basket rim.
-- **Fitting the floor → sim transform on where the bottle came to rest** put releases on the basket rim,
-  because the bottle tipped ~6 cm further after the hand opened. Fitting on the hand's grasp and release points fixed it.
-- **The arm lagged the path by 4–7 cm** and knocked the ketchup over while still moving sideways.
-  It now lines up above the ketchup and descends vertically.
-- **Grasping where the hand did** (often near the neck) made the ketchup slip. A height sweep gave a secure
-  8.5–10.5 cm band, and the human grasp height is mapped into it.
-- **More data of the same kind** (A2, D4) and **training longer** (D-40k) did not help.
-- **Giving my paths a uniform, smooth timing** (E) did not help either (30% vs 50%).
-- **A smaller policy without pretraining** (ACT, F): 18%.
-- **Smoothing out hand-tracking jitter** (H): 52%, no change from D.
-- **My first explanation for C's 0% was wrong.** I blamed the slow approach above the bottle in the idealised
-  motion; C2 has the same approach and scores 98%. C hovered because it never knew exactly where the bottle would be.
-
-## Limitations and future work
-
-- **One task, one seed per run, 50 evaluation episodes.** Differences under ~15 points are within noise.
-- **The evaluation always has the ketchup in one place**, so finding 2 is partly about matching the benchmark;
-  generalising to new positions would need many more (or more varied) demos.
-- **Robot-side grasp and release steps.** A phone can't measure finger contact well enough to drive the gripper
-  directly, so ~30% of each episode is scripted. Better hand tracking (e.g. hand-pose models with finger contact)
-  could reduce this.
-- **Averaging works because the test is narrow.** G's demos all share one path shape. With the bottle in
-  different places each time, a middle ground (blending part-way towards the average, or averaging only
-  demos that start and end near each other) would keep more variety.
-- **Better hand tracking.** 3-D hand-mesh models such as HaMeR or WiLoR would give better depth than a single
-  camera with MediaPipe. Run H suggests this wouldn't change the success rate here (removing jitter didn't
-  help), but it would matter for tasks that need precise hand positions, and for driving the gripper
-  directly instead of with robot-side grasp steps.
-- **World models.** The core problem found here is too few, too inconsistent human demos. A world model
-  that predicts future video and actions together could generate many more consistent robot demos from
-  a handful of human videos (DreamGen / Cosmos-style data generation), or be trained directly on the human
-  videos. That needs much more GPU time than this project had, but it attacks exactly the gap measured by D vs C2.
+**5. Training and evaluation** (`setup/run_experiment.sh`, `setup/evaluate.sh`). SmolVLA
+(`lerobot/smolvla_base`) is fine-tuned with the same settings in every run (batch 32, 20k steps,
+seed 1000) and evaluated with `lerobot-eval` on the 50 standard layouts of the task.
 
 ---
 
-## Running it yourself
+## Results
 
-### Setup
+![success rate of every run](docs/media/results.png)
 
-Ubuntu or WSL2 with conda installed:
+| Run | Training data (54 demos unless noted) | 10k steps | 20k steps (final) |
+|---|---|---|---|
+| **B** | LIBERO's own robot demos (45), reference | 70% | **86%** (74–93%) |
+| A | my motion, bottle where my hand found it | 22% | 18% (10–31%) |
+| A2 | my motion, bottle at random points of LIBERO's spawn area, ×4 (216) | 22% | 22% (13–35%) |
+| C | scripted motion, bottle where my hand found it (control) | 0% | 0% (0–7%) |
+| C2 | scripted motion, bottle at the evaluation spot, 50 layouts (control) | 88% | **98%** (90–100%) |
+| D | my motion, bottle at the evaluation spot, 50 layouts | 20% | **50%** (37–63%) |
+| D4 | D, each demo replayed in 4 layouts (216) | 16% | 24% (14–37%) |
+| D-40k | D, trained for 40k steps | 10%\* | 48% (35–61%) |
+| E | D with one fixed, smooth timing for every demo | 20% | 30% (19–44%) |
+| F | D's data, ACT instead of SmolVLA (30k steps) | 20% | 18% (10–31%) |
+| **G** | **D with the path shapes averaged across demos** | **96%** | **96%** (87–99%) |
+| H | D with hand-tracking jitter filtered out | 24% | 52% (39–65%) |
 
-```bash
-bash setup/install_linux.sh             # GPU machine
-CPU_ONLY=1 bash setup/install_linux.sh  # laptop / WSL2
-conda activate humanoid
-```
+Brackets are 95% Wilson intervals over 50 episodes. \*D-40k's learning rate decays more slowly,
+so its 10k checkpoint isn't comparable. Raw numbers: [outputs/eval/results.md](outputs/eval/results.md)
+and the `eval_info.json` files next to it. "Scripted motion" (C, C2) swaps my reach and carry for
+straight minimum-jerk moves and keeps everything else from each demo.
 
-### Browse LIBERO scenes
+![training loss](docs/media/wandb_loss.png)
 
-```bash
-python src/view_scenes.py --list-only   # task names only
-python src/view_scenes.py               # render scenes to outputs/scenes/
-```
+*Training loss in Weights & Biases for B (`smolvla_libero_ref`), C2 (`smolvla_scripted_eval`),
+D (`smolvla_phone_eval`) and G (`smolvla_phone_blend10`). G and C2 fit as fast as LIBERO's own demos;
+D's loss stays highest the whole way, because its 54 different paths are harder to fit. That is the
+same problem the results below point to.*
 
-### From phone video to trajectories
+### What the results mean
 
-1. Put the long recordings in `data/raw/` and list one demo per row in `data/clips.csv`
-   (`video,start,end`). Then cut them into `data/clips/ep_001.mp4 ...`:
+1. **The pipeline itself works.** With idealised motion (C2) it produces data that trains SmolVLA
+   to 98%, above LIBERO's own demos. That ruled out a bug in retargeting, action labels or format.
+2. **Where the bottle is mattered first.** In all 50 evaluation layouts the ketchup is at exactly
+   the same spot, and LIBERO's demos have it there too. My first datasets put it wherever my hand
+   found the bottle (typically 3 cm away, up to 13 cm), so the policy had to find a narrow bottle by
+   sight from 54 examples and knocked it over. Moving it to the evaluation spot: C 0% → C2 98%,
+   A 18% → D 50%.
+3. **What was left was the variation between my paths.** D and C2 differ only in the motion. Three
+   runs narrowed down which part of the motion hurts:
+   - E: same paths, one fixed timing → 30%. Timing is not the problem (if anything my own speed,
+     slowing down near the bottle, helps).
+   - H: tracking jitter (~6 mm during the reach) filtered out → 52%. Measurement noise is not it.
+   - D-40k: twice the training → 48%. Not under-training either.
+4. **Averaging the path shapes fixes it (G, 96%).** Each path is split into the straight line from
+   its start to its end plus how it bends away from that line. The bends are averaged over normalised
+   time and put back on each demo's own line. Every demo keeps its own start, grasp, release and
+   duration, and the shape is still made of my motion; it is just consistent now.
+5. **More copies of the same motions don't help** (A2, D4), and **the pretrained VLA matters**:
+   ACT trained from scratch on D's data got 18% against SmolVLA's 50%.
 
-   ```bash
-   python src/cut_clips.py
-   ```
+![the robot paths in D and G](docs/media/paths_D_vs_G.png)
 
-2. Extract a gripper trajectory from every clip (downloads MediaPipe's hand model
-   to `models/` on first run; about 40 s per clip on a laptop CPU):
+*The robot's gripper paths in the training data. Left: D, each demo follows my own hand path.
+Right: G, every demo has the average shape but its own start, end and timing.*
 
-   ```bash
-   python src/extract_trajectory.py
-   ```
+**Failures.** From the first 10 evaluation videos of each run: D hovers over the ketchup (3),
+knocks it over (2), or drops it beside the basket or runs out of time (2). The scripted control C,
+with the bottle in the wrong place, mostly hovered (7/10).
 
-   Results go to `data/trajectories/`: one `.npz` + `.json` + `_debug.png` per
-   episode, and `summary.csv`. Episodes marked `check` or `failed` in the summary
-   need a look at their debug image.
+![three ways run D fails](docs/media/failure_modes_D.png)
 
-3. Retarget every trajectory onto the Panda and replay it in LIBERO:
+**Side test: re-planning more often.** SmolVLA predicts 50 actions and normally plays them all
+(2.5 s) before looking again. Re-planning D every 10 or 5 steps gave 58% and 42%, within the
+noise of 50 episodes, so every run uses the default.
 
-   ```bash
-   python src/replay_in_sim.py            # all 54, no rendering (~15 s each)
-   python src/replay_in_sim.py --episodes ep_029 --video
-   ```
+---
 
-   Results go to `data/sim_replays/`: `results.csv` (success per episode),
-   `ep_XXX.npz` (actions, states, phases) and `retarget.json` (the fitted floor -> sim transform).
+## Design choices
 
-4. Side-by-side video of a demo and its replay (time-aligned):
+- **Phone + printed marker, no depth camera.** Anyone can record this. The marker fixes scale
+  and the floor plane; the A4 sheet around it calibrates the focal length, so no calibration step.
+- **Geometry over learned depth where possible.** Single-image hand depth was off by up to 40%
+  during the carry. The carry stays near the vertical plane between the bottle's start and the
+  box, so intersecting the hand's ray with that plane gives a reliable 3-D path.
+- **Human motion for the big movements, robot-side steps for contact.** A phone can't tell how
+  the fingers close on the bottle, and copying the hand's grasp made the ketchup slip. The robot
+  follows my reach and carry and does the last few centimetres itself.
+- **Use the benchmark's own action space and data format.** Replays go through LIBERO's own
+  controller, and the dataset matches `lerobot/libero` exactly, so the comparison with LIBERO's
+  demos (B) uses identical training and evaluation code.
+- **SmolVLA** is small enough (~450M parameters) to fine-tune on a single 16 GB GPU in ~75 min,
+  and is pretrained, which matters with 54 demos (run F).
+- **Controls and one change per run.** Each run changes one thing relative to another, so a
+  difference in success has one explanation. The scripted controls (C, C2) were what turned
+  "it gets ~20%" into a diagnosis.
 
-   ```bash
-   python src/side_by_side.py --episodes ep_029 ep_051 --speed 1.3
-   ```
+## What worked and what didn't
 
-5. Build a training dataset (LeRobot format, same layout as `lerobot/libero`):
-
-   ```bash
-   python src/make_dataset.py --placement eval --init-state all --out data/lerobot/ketchup_phone_eval  # run D
-   python src/make_dataset.py --placement eval --init-state all --dry-run   # check replays only, writes nothing
-   ```
-
-   Run G (the best result) is `--placement eval --init-state all --blend 1.0`.
-   Options: `--motion human|timed|scripted`, `--placement human|spawn|eval`, `--blend 0..1`
-   (pull each path towards the average path shape), `--smooth SECONDS` (remove tracking jitter),
-   `--noise STD` (push the `--augment` copies off course and record the corrections),
-   `--init-state N|all`, `--augment K` (K extra replays per demo), `--speed` (default 1.3: plays
-   the human motion 1.3x faster so every replay finishes well inside LIBERO's 280-step limit).
-
-### Replay results
-
-| | |
+| Worked | Didn't work |
 |---|---|
-| Replays that put the ketchup in the basket | 54 / 54 in layout 0; 54 / 54 with each demo in a different layout (`--init-state all`) |
-| Share of each replay driven directly by the human motion (reach + carry) | 70 % of control steps |
-| Releases moved to land inside the basket opening | 22 / 54, by 2.1 cm on average (max 5.9 cm) |
-| Episode length at 1.3x | success at step 178 (median), 223 (slowest) |
+| Hand-ray / carry-plane intersection for depth | Marker-based hand depth during the carry (up to 40% off) |
+| Fitting the floor → sim transform on where the **hand** released | Fitting it on where the bottle came to rest (tipped ~6 cm further, releases hit the rim) |
+| Robot lines up above the ketchup and descends vertically | Following the path directly: the arm lagged 4–7 cm and knocked the bottle over |
+| Grasp height mapped into a tested 8.5–10.5 cm band | Copying the hand's grasp height (neck grasps slipped) |
+| Bottle at the exact evaluation spot (A → D) | Bottle anywhere in the spawn area (A2), more copies of the same demos (D4) |
+| Averaging the path shapes (D → G, 96%) | Uniform timing (E), smoothing jitter (H), longer training (D-40k), ACT (F) |
 
-### Training and evaluation
+One thing I got wrong on the way: I first blamed C's 0% on the slow approach above the bottle in
+the scripted motion. C2 has the same approach and scores 98%; C hovered because it never knew where
+the bottle would be.
 
-One command per experiment (dataset → training → evaluation of the 10k and final checkpoints):
+## Limitations, and what I'd do with more time
+
+- **One task, one seed per run, 50 episodes.** Differences under ~15 points are within noise.
+  With more compute: 3 seeds per run, and the same pipeline on other LIBERO tasks.
+- **The benchmark is narrow.** The ketchup is always in the same place, which is why averaging the
+  paths works so well. To generalise to new positions I would record more demos with the bottle
+  moved around and blend only part-way towards the average, or average only demos that start and
+  end close to each other.
+- **The grasp is partly scripted.** About 30% of each episode is robot-side steps. A 3-D hand-mesh
+  model (HaMeR, WiLoR) or a second camera would give finger contact and better depth, so the gripper
+  could follow the hand directly.
+- **RL fine-tuning.** G is a good starting policy for reinforcement learning in LIBERO (e.g. PPO or
+  residual RL on top of the VLA), which could fix the last few percent and recover from mistakes.
+- **World models.** The core problem here was too few, too inconsistent demos. An action-conditioned
+  video model trained on my clips could generate many more consistent demos, or act as a learned
+  simulator to check a policy before running it.
+- **Speed.** Evaluating 50 episodes takes under a minute on the GPU, but a real robot needs low
+  latency per action chunk: I would profile and quantise SmolVLA and compare chunk sizes.
+
+---
+
+## Datasets and models
+
+Everything in the results table can be rebuilt from `data/trajectories/` (in this repo) with one
+command per run (see below). The main artefacts are also on the Hugging Face Hub:
+
+| What | Where | Size |
+|---|---|---|
+| 54 phone clips (input) | [datasets/yjoshi5379/real2sim-ketchup-phone-clips](https://huggingface.co/datasets/yjoshi5379/real2sim-ketchup-phone-clips) | 54 mp4 clips, 30 fps |
+| Extracted 3-D trajectories | `data/trajectories/ep_001.npz` … `ep_054.npz` (+ `.json`) | 54 files |
+| Dataset D (each demo's own path) | [datasets/yjoshi5379/real2sim-ketchup-D](https://huggingface.co/datasets/yjoshi5379/real2sim-ketchup-D) | 54 episodes, 10,285 frames |
+| Dataset G (averaged path shape) | [datasets/yjoshi5379/real2sim-ketchup-G](https://huggingface.co/datasets/yjoshi5379/real2sim-ketchup-G) | 54 episodes, 10,042 frames |
+| SmolVLA trained on G (96%) | [yjoshi5379/smolvla-real2sim-ketchup-G](https://huggingface.co/yjoshi5379/smolvla-real2sim-ketchup-G) | |
+| SmolVLA trained on D (50%) | [yjoshi5379/smolvla-real2sim-ketchup-D](https://huggingface.co/yjoshi5379/smolvla-real2sim-ketchup-D) | |
+
+Local names when you rebuild them: run *X* writes `data/lerobot/ketchup_<name>/`,
+`outputs/train/<run>/` and `outputs/eval/<run>_<checkpoint>/`, with these names:
+
+| Run | Dataset folder | Train / eval name | `make_dataset.py` options |
+|---|---|---|---|
+| A | `ketchup_phone` | `smolvla_phone` | `--placement human` |
+| A2 | `ketchup_phone_spawn4` | `smolvla_phone_spawn4` | `--placement spawn --augment 3` |
+| B | (LIBERO's `lerobot/libero`, 45 episodes) | `smolvla_libero_ref` | n/a |
+| C | `ketchup_scripted` | `smolvla_scripted` | `--motion scripted --placement human` |
+| C2 | `ketchup_scripted_eval` | `smolvla_scripted_eval` | `--motion scripted --placement eval --init-state all` |
+| D | `ketchup_phone_eval` | `smolvla_phone_eval` | `--placement eval --init-state all` |
+| D4 | `ketchup_phone_eval4` | `smolvla_phone_eval4` | `--placement eval --init-state all --augment 3` |
+| D-40k | `ketchup_phone_eval` | `smolvla_phone_eval_40k` | as D |
+| E | `ketchup_phone_timed` | `smolvla_phone_timed` | `--motion timed --placement eval --init-state all` |
+| F | `ketchup_phone_eval` | `act_phone_eval` | as D |
+| G | `ketchup_phone_blend10` | `smolvla_phone_blend10` | `--placement eval --init-state all --blend 1.0` |
+| H | `ketchup_phone_smooth` | `smolvla_phone_smooth` | `--placement eval --init-state all --smooth 0.75` |
+
+---
+
+## Running it
+
+### What runs where
+
+| Step | Needs | Linux | Windows | macOS |
+|---|---|---|---|---|
+| Cut clips, extract trajectories | CPU | ✓ | ✓ in WSL2 | ✓ |
+| Replay in the simulator, build datasets | CPU (LIBERO) | ✓ | ✓ in WSL2 | ✗ (use Linux or a cloud machine) |
+| Train | NVIDIA GPU (my runs used ~5 GB of its memory) | ✓ | ✓ in WSL2 (CUDA on WSL, not tested by me) | slow on Apple GPU (`DEVICE=mps`) |
+| Evaluate | LIBERO; GPU recommended | ✓ | ✓ in WSL2 | ✗ |
+
+What I used: a Windows laptop without a GPU (WSL2, Ubuntu 22.04) for recording, extraction and
+replays, and a Linux workstation with an RTX 4070 Ti SUPER (16 GB) for training and evaluation.
+Any Linux cloud GPU (e.g. RunPod) works the same way. LIBERO's package only installs on Linux,
+which is why the simulator steps need Linux or WSL2.
+
+### 1. Install
+
+**Linux** (Ubuntu 22.04 tested): install [Miniconda](https://www.anaconda.com/docs/getting-started/miniconda/install) and git, then
 
 ```bash
-bash setup/run_experiment.sh HF_USERNAME phone_blend10 --placement eval --init-state all --blend 1.0  # G
-bash setup/run_experiment.sh HF_USERNAME phone_eval --placement eval --init-state all          # D
-bash setup/run_experiment.sh HF_USERNAME scripted_eval --motion scripted --placement eval --init-state all  # C2
-ONLY=B bash setup/train_both.sh HF_USERNAME                                                    # B (LIBERO's demos)
+git clone https://github.com/yash-joshi5379/Real2Sim-Task.git
+cd Real2Sim-Task
+bash setup/install.sh          # 15-30 min; creates the conda env "real2sim"
+conda activate real2sim
 ```
 
-Results are collected in `outputs/eval/results.md` by `setup/eval_all.sh`. Set `WANDB=1` for
-live loss curves; text logs go to `logs/`.
+`install.sh` installs the OpenGL libraries with `apt-get` (needs sudo; on a shared machine without
+sudo run `SKIP_APT=1 bash setup/install.sh`), PyTorch (CUDA 12.8 build if `nvidia-smi` is found,
+CPU build otherwise), LeRobot pinned to the commit I used (`setup/lerobot_commit.txt`) with the
+exact package versions of my runs (`setup/requirements-lock.txt`), and checks that the simulator
+renders.
 
-### Running on a UCL GPU workstation (no admin rights)
+**Windows**: open PowerShell as administrator, run `wsl --install -d Ubuntu-22.04`, restart, open
+"Ubuntu", then follow the Linux steps inside it. Keep the repo inside the Linux file system
+(`~/Real2Sim-Task`, not `/mnt/c/...`) or file access is very slow. The simulator renders on the
+CPU there (OSMesa, chosen automatically). For GPU training in WSL2, install the normal NVIDIA
+Windows driver; CUDA then works inside WSL2.
+
+**macOS**: install Miniconda (Apple Silicon or Intel) and run the same `bash setup/install.sh`.
+It installs everything except LIBERO, so steps "Cut" and "Extract" below work; for the simulator,
+training and evaluation use a Linux machine.
+
+### 2. Quick check, no GPU and no videos needed
 
 ```bash
-cd /scratch0/$USER && git clone https://github.com/YOUR_GITHUB/Real2Sim-Task.git   # or: git pull
-cd Real2Sim-Task && bash setup/install_ucl.sh          # 15-25 min; reuses saved package versions
-source ~/.bashrc && conda activate humanoid
-hf auth login && wandb login                           # once per machine
+python src/replay_in_sim.py                               # all 54 demos, ~15 min: "54/54 replays ..."
+python src/replay_in_sim.py --episodes ep_029 --video     # -> data/sim_replays/ep_029.mp4
+python src/make_dataset.py --placement eval --init-state all --blend 1.0 --dry-run   # run G's data
 ```
 
-End of a session (saves versions, results and logs to git; models and videos to Hugging Face):
+Each replay takes ~15 s on a laptop CPU.
+
+### 3. Reproduce a row of the results table
 
 ```bash
-bash setup/backup_session.sh HF_USERNAME
+bash setup/run_experiment.sh G       # any of: A A2 B C C2 D D4 D40k E F G H
+python src/results.py                # rebuilds outputs/eval/results.md and docs/media/results.png
 ```
+
+This builds the dataset (15–30 min), trains (~75 min on an RTX 4070 Ti SUPER) and evaluates the
+10k and final checkpoints (~2 min each). `STEPS=2000` gives a quick smoke test, `WANDB=1` logs
+loss curves to Weights & Biases (`wandb login` first). Run it inside `tmux` on a remote machine.
+If `outputs/train/<run>` already exists, delete it or `lerobot-train` refuses to start.
+
+To evaluate the published model without training:
+
+```bash
+MODEL=yjoshi5379/smolvla-real2sim-ketchup-G bash setup/evaluate.sh G_from_hub
+```
+
+### 4. From your own videos
+
+1. **Print the marker**: an ArUco marker from the 5×5 dictionary, id 68, on A4 paper, with the
+   black square measuring exactly 100 mm:
+   ```bash
+   python -c "import cv2; cv2.imwrite('marker68.png', cv2.aruco.generateImageMarker(cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_1000), 68, 1181))"
+   ```
+   Print `marker68.png` at 100 mm wide (1181 px at 300 dpi) and measure it.
+2. **Record**: phone fixed on a stand, landscape, 4K 30 fps, marker sheet flat and fully in view,
+   layout as in the photo above (bottle on the left, box 30–80 cm to its right). For each demo,
+   reach, pick up the bottle, put it in the box, and take your hand away. Put the bottle back
+   between demos; it's fine to record many demos in one long video.
+3. **Cut**: put the long videos in `data/raw/`, write the start and end of each demo in
+   `data/clips.csv` (format at the top of `src/cut_clips.py`), then
+   `python src/cut_clips.py` → `data/clips/ep_001.mp4 …`
+4. **Extract**: `python src/extract_trajectory.py` → `data/trajectories/` (look at the
+   `*_debug.png` images and `summary.csv`; clips marked `check` are worth a look).
+5. **Replay and look**: `python src/replay_in_sim.py`, then
+   `python src/side_by_side.py --episodes ep_001` for a video like the one at the top.
+6. **Train and evaluate**: `bash setup/run_experiment.sh G`.
+
+My clips can be downloaded to try steps 4 and 5:
+`hf download yjoshi5379/real2sim-ketchup-phone-clips --repo-type dataset --local-dir data/clips`
+
+### Troubleshooting
+
+- **Simulator doesn't render** (`check_render.py` fails, EGL errors): set the renderer by hand,
+  `export MUJOCO_GL=osmesa PYOPENGL_PLATFORM=osmesa` (CPU, always works) or `MUJOCO_GL=egl` on a
+  machine with an NVIDIA GPU. `EGLError ... eglDestroyContext` messages when a script *exits* are
+  harmless.
+- **LIBERO asks a question on first import**: answer `N` (keeps its default paths); `install.sh`
+  does this for you.
+- **Small home directory** (shared machines): point the caches to a larger disk before installing,
+  e.g. `export HF_HOME=/big/disk/hf PIP_CACHE_DIR=/big/disk/pip`.
+- **`torch.load` error about `weights_only`** when loading LIBERO's starting layouts: use the code
+  in this repo (`load_init_states` in `src/replay_in_sim.py` handles torch ≥ 2.6).
+
+---
 
 ## Repository layout
 
 ```
-src/view_scenes.py         render LIBERO scenes
-src/cut_clips.py           long recordings -> one clip per demo
-src/extract_trajectory.py  clip -> 3-D gripper path (ArUco + MediaPipe)
+src/cut_clips.py           long recordings -> one clip per demo (ffmpeg)
+src/extract_trajectory.py  clip -> 3-D gripper path + gripper signal (ArUco, MediaPipe)
 src/replay_in_sim.py       retarget a path onto the Panda and replay it in LIBERO
-src/side_by_side.py        human clip | robot replay video
-src/make_dataset.py        replays -> LeRobot dataset (motion / placement / layout options)
-src/reference_episodes.py  finds LIBERO's own demos of the task in lerobot/libero
-setup/                     install, train, evaluate and backup scripts
-outputs/eval/results.md    all evaluation results
+src/side_by_side.py        my demo | robot replay video
+src/make_dataset.py        replays -> LeRobot dataset (all the options behind runs A-H)
+src/reference_episodes.py  finds LIBERO's own demos of the task in lerobot/libero (run B)
+src/results.py             evaluation results -> table + chart
+src/plot_paths.py          the D vs G path figure
+setup/install.sh           environment (Linux, WSL2, macOS)
+setup/run_experiment.sh    dataset -> training -> evaluation for one run
+setup/evaluate.sh          lerobot-eval on the 50 layouts
+setup/publish_hf.sh        uploads clips, datasets and models to the Hugging Face Hub
+data/clips.csv             start and end of each demo in my recordings
+data/trajectories/         the 54 extracted trajectories
+outputs/eval/              evaluation results of every run (eval_info.json)
+docs/                      figures and the slide deck
 ```

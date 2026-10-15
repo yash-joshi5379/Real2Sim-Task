@@ -1,7 +1,7 @@
 """List the episodes of a LeRobot dataset that belong to one task.
 
 Used to train the comparison policy on LIBERO's own robot demos of the same task
-(lerobot/libero contains all 40 LIBERO tasks; we want only the ketchup one).
+(lerobot/libero contains all 40 LIBERO tasks; only the ketchup one is needed).
 
 Some datasets list each episode's task in their metadata; others (such as
 lerobot/libero) only store it per frame. In that case the small per-frame table
@@ -37,7 +37,7 @@ def tasks_from_frames(meta, repo_id, root):
 
     root = Path(meta.root)
     files = sorted(root.glob("data/**/*.parquet"))
-    if not files and root is not None:
+    if not files:
         from huggingface_hub import snapshot_download
 
         print("episode metadata has no task names; downloading the per-frame table (no videos)...")
@@ -66,13 +66,12 @@ def main():
     p.add_argument("--root", default=None, help="local copy of the dataset, if any")
     p.add_argument("--task", default=TASK)
     p.add_argument("--limit", type=int, default=None)
-    p.add_argument("--from-frames", action="store_true", help=argparse.SUPPRESS)  # testing
     args = p.parse_args()
 
     from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 
     meta = LeRobotDatasetMetadata(args.repo_id, root=args.root)
-    ep_tasks = None if args.from_frames else tasks_from_metadata(meta)
+    ep_tasks = tasks_from_metadata(meta)
     if ep_tasks is None:
         ep_tasks = tasks_from_frames(meta, args.repo_id, args.root)
 

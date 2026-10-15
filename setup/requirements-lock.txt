@@ -1,3 +1,5 @@
+# Exact package versions of the environment all results were produced with
+# (Linux, Python 3.12, CUDA 12.8). setup/install.sh uses them as pip constraints.
 absl-py==2.5.1
 accelerate==1.15.0
 aiohappyeyeballs==2.7.1

@@ -1,4 +1,4 @@
-"""Turn each demo clip into a 3D gripper trajectory + open/close signal.
+"""Turn each demo clip into a 3D gripper trajectory and an open/close signal.
 
 Pipeline per clip (all positions in metres, in the ArUco marker's frame:
 origin = marker centre, z = up from the floor):
@@ -296,9 +296,9 @@ def find_bottle(head, tail, cam):
     x, y, w, h, _ = start
     base = cam.floor_point((x + w / 2, y + h))
     height = closest_on_vertical(cam, (x + w / 2, y), base[:2])
-    # the drop: the biggest other moved blob that is where the box can be. The box is
-    # 30-80 cm from the start, roughly along +y (to the side of the bottle, as in the sim);
-    # this rules out your body or arm, which also moved between the first and last frame.
+    # the drop: the biggest other moved blob where the box can be. The box is 30-80 cm
+    # from the start, roughly along +y (to the side of the bottle, as in the sim); this
+    # rules out my body or arm, which also moved between the first and last frame.
     others = []
     for b in blobs:
         if b is start:
@@ -568,7 +568,6 @@ def process(clip, out_dir, model_path, focal_4k=None):
     if lift is None:
         raise RuntimeError("bottle never lifted")
 
-
     # 3. hand: 3D grasp point per frame, following the hand that grabs the bottle
     chosen = follow_hand(per_frame, track, lift)
     hand = np.full((n, 3), np.nan)             # PnP thumb-index midpoint, marker frame
@@ -655,18 +654,16 @@ def process(clip, out_dir, model_path, focal_4k=None):
     segment = np.zeros(n, dtype=np.int8)       # 0 reach, 1 carry, 2 retreat
     segment[lift:release + 1] = 1
     segment[release + 1:] = 2
-    hvalid = seen
-    depth_scale = k_in
     dxy = np.linalg.norm(pos[:, :2] - drop[:2], axis=1)
     grasp_height = float(on_plane[lift, 2])
 
     # quality
     pre, post = slice(0, lift), slice(release + 1, n)
     q = {
-        "hand_coverage_reach": float(hvalid[pre].mean()) if lift else 0.0,
-        "hand_coverage_retreat": float(hvalid[post].mean()) if release + 1 < n else 0.0,
-        "hand_coverage_carry": float(hvalid[lift:release + 1].mean()),
-        "hand_depth_scale_reach": depth_scale,
+        "hand_coverage_reach": float(seen[pre].mean()) if lift else 0.0,
+        "hand_coverage_retreat": float(seen[post].mean()) if release + 1 < n else 0.0,
+        "hand_coverage_carry": float(seen[lift:release + 1].mean()),
+        "hand_depth_scale_reach": k_in,
         "hand_depth_scale_retreat": float(k_out),
         "grasp_height_m": grasp_height,
         "release_dist_to_drop_m": float(dxy[release]),

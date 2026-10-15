@@ -1,8 +1,9 @@
-# Installed on top of LeRobot (see setup/install_linux.sh)
-pillow
+# Installed on top of LeRobot by setup/install.sh (versions pinned by setup/requirements-lock.txt)
 numpy
 scipy
 matplotlib
-mediapipe==0.10.32   # hand landmarks (Tasks API); tested version
+pillow
+opencv-contrib-python   # ArUco marker detection
+mediapipe==0.10.32      # hand landmarks
 imageio
-imageio-ffmpeg     # mp4 writing for replay videos
+imageio-ffmpeg
