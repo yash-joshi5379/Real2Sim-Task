@@ -60,7 +60,7 @@ Real2Sim-Task/
 │       ├── results.md             all runs and checkpoints in one table
 │       └── <run>_<checkpoint>/eval_info.json
 └── docs/
-    ├── presentation.pptx          slides (use this one: animations and transitions)
+    ├── /final_presentation.pptx          slides (use this one: animations and transitions)
     ├── presentation.pdf           slides, static backup
     └── media/                     figures and GIFs used in this README
 ```
