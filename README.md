@@ -26,7 +26,7 @@ demos. Getting there took 12 training runs, including control experiments that s
 first versions only reached ~20%.
 
 **Slides:** the same story as a 13-slide deck. Open
-[docs/presentation.pptx](docs/presentation.pptx) to see the animations (GIFs) and slide transitions;
+[docs/presentation.pptx](docs/Final_presentation.pptx) to see the animations (GIFs) and slide transitions;
 [docs/presentation.pdf](docs/presentation.pdf) is a backup that shows still frames instead.
 
 ## Repository structure
